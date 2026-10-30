@@ -225,6 +225,218 @@ def strip_radiotap(raw):
     return raw[8:]
 
 
+# ---------------------------------------------------------------------------
+# pcap 文件解析（真实抓包：手写 pcap 容器解析，仅依赖 struct）
+# ---------------------------------------------------------------------------
+def read_pcap(path):
+    """读取 pcap 文件（全局头 + 包记录），支持微秒/纳秒与大小端 magic。"""
+    with open(path, "rb") as fp:
+        data = fp.read()
+    magic = data[:4]
+    if magic == b"\xd4\xc3\xb2\xa1":
+        endian, nanosec = "<", False
+    elif magic == b"\x4d\x3c\xb2\xa1":
+        endian, nanosec = "<", True
+    elif magic == b"\xa1\xb2\xc3\xd4":
+        endian, nanosec = ">", False
+    elif magic == b"\xa1\xb2\x3c\x4d":
+        endian, nanosec = ">", True
+    else:
+        raise ValueError("不是标准 pcap 文件 (magic=%r)" % magic)
+    if len(data) < 24:
+        raise ValueError("pcap 文件过短")
+    linktype = struct.unpack(endian + "I", data[20:24])[0]
+    pkts = []
+    off = 24
+    n = len(data)
+    while off + 16 <= n:
+        ts_sec, ts_frac, incl_len, orig_len = struct.unpack(endian + "IIII", data[off:off + 16])
+        off += 16
+        if off + incl_len > n:
+            break
+        pkts.append((ts_sec, ts_frac, incl_len, orig_len, data[off:off + incl_len]))
+        off += incl_len
+    return linktype, pkts, nanosec
+
+
+LINKTYPE_NAME = {
+    0: "Null/Loopback", 1: "Ethernet", 105: "IEEE 802.11", 127: "IEEE 802.11 + Radiotap",
+    195: "802.11 AVS",
+}
+
+
+def parse_ctrl_short(buf):
+    """控制帧专用解析：RTS/CTS/ACK/PS-Poll 等短帧（<24 字节，无完整 3 地址头）。"""
+    fc = struct.unpack("<H", buf[:2])[0]
+    f = parse_frame_control(fc)
+    info = {}
+    if f["subtype"] == 4 and len(buf) >= 16:      # RTS: RA + TA
+        info["ra"] = mac_str(buf[4:10])
+        info["ta"] = mac_str(buf[10:16])
+    elif f["subtype"] in (5, 6) and len(buf) >= 10:  # CTS / ACK: RA
+        info["ra"] = mac_str(buf[4:10])
+    elif len(buf) >= 16:                          # PS-Poll / CF-End 等
+        info["addr1"] = mac_str(buf[4:10])
+        info["addr2"] = mac_str(buf[10:16])
+    return info
+
+
+def parse_pcap_file(path):
+    """解析整个 pcap 文件，逐帧提取 802.11 信息。"""
+    linktype, pkts, nanosec = read_pcap(path)
+    results = []
+    for ts_sec, ts_frac, incl_len, orig_len, body in pkts:
+        dot11 = body
+        if linktype == 127:      # Radiotap 链路层
+            dot11 = strip_radiotap(body)
+        elif linktype == 1:      # Ethernet（转发/本机抓包场景，剥 14 字节头）
+            dot11 = body[14:] if len(body) > 14 else body
+        rec = {
+            "t": ts_sec + ts_frac / (1e9 if nanosec else 1e6),
+            "incl": incl_len, "orig": orig_len, "raw": len(dot11),
+        }
+        if len(dot11) < 2:
+            rec["error"] = "帧过短"
+            results.append(rec)
+            continue
+        fc = struct.unpack("<H", dot11[:2])[0]
+        f = parse_frame_control(fc)
+        fam, sub = type_name(f)
+        rec["fam"], rec["sub"] = fam, sub
+        try:
+            if f["type"] == 1 or len(dot11) < 24:
+                rec.update(parse_ctrl_short(dot11))
+            else:
+                h = parse_mac_header(dot11)
+                rec.update({k: h[k] for k in (
+                    "addr1", "addr2", "addr3", "seq_num", "protected", "to_ds", "from_ds",
+                    "retry", "pwr_mgmt")})
+                body = dot11[24:]
+                if fam == "Management" and sub == "Beacon":
+                    b = parse_beacon(body)
+                    rec["ssid"] = b["ssid"]
+                    rec["channel"] = b["channel"]
+                    rec["rates"] = b["rates_mbps"]
+                elif fam == "Management" and sub == "Probe Request":
+                    b = parse_probe_req(body)
+                    rec["probe_ssid"] = b["ssid"]
+                elif fam == "Management" and sub == "Probe Response":
+                    b = parse_beacon(body)
+                    rec["ssid"] = b["ssid"]
+                    rec["channel"] = b["channel"]
+                elif fam == "Data":
+                    qos_body = body
+                    if h["subtype"] in (8, 9, 10, 12, 13, 14) and len(body) >= 2:
+                        qos_body = body[2:]  # QoS Data 帧体开头有 2 字节 QoS Control
+                    r = parse_data_frame(h, qos_body)
+                    rec["encrypted"] = r["encrypted"]
+                    rec["preview"] = r["payload_preview"]
+        except Exception as e:
+            rec["error"] = str(e)
+        results.append(rec)
+    return linktype, results
+
+
+def print_pcap_report(path):
+    """打印 pcap 逐帧解析报告 + 统计。"""
+    linktype, results = parse_pcap_file(path)
+    print("#" * 70)
+    print("# pcap 解析报告: %s" % path)
+    print("# 链路层: %s (%d)" % (LINKTYPE_NAME.get(linktype, "Unknown"), linktype))
+    print("# 共 %d 帧" % len(results))
+    print("#" * 70)
+    for i, r in enumerate(results):
+        print("[%02d] t=%.6f %s/%s" % (i, r["t"], r["fam"], r["sub"]))
+        if "error" in r:
+            print("      error: %s" % r["error"])
+            continue
+        if "ra" in r:
+            print("      RA=%s" % r["ra"])
+        if "ta" in r:
+            print("      TA=%s" % r["ta"])
+        if "addr1" in r:
+            print("      addr1=%s" % r["addr1"])
+        if "addr2" in r:
+            print("      addr2=%s" % r["addr2"])
+        if "addr3" in r:
+            print("      addr3=%s" % r["addr3"])
+        if "seq_num" in r:
+            print("      seq=%d frag=%d retry=%d" % (r["seq_num"], r.get("frag_num", 0), r.get("retry", 0)))
+            print("      protected=%d to_ds=%d from_ds=%d pwr_mgmt=%d"
+                  % (r["protected"], r["to_ds"], r["from_ds"], r.get("pwr_mgmt", 0)))
+        if "ssid" in r:
+            print("      SSID=%s channel=%s" % (r["ssid"], r["channel"]))
+        if "probe_ssid" in r:
+            print("      探测SSID=%s" % r["probe_ssid"])
+        if "encrypted" in r:
+            print("      加密=%s payload=%s" % (r["encrypted"], r.get("preview", "")))
+    # 统计
+    fams = {}
+    for r in results:
+        fams[r.get("fam", "?")] = fams.get(r.get("fam", "?"), 0) + 1
+    ssids = sorted({r["ssid"] for r in results if "ssid" in r})
+    enc = sum(1 for r in results if r.get("encrypted"))
+    print("=" * 70)
+    print("[统计] 帧类型: %s" % ", ".join("%s x%d" % (k, v) for k, v in sorted(fams.items())))
+    print("[统计] 发现的 SSID: %s" % (", ".join(ssids) if ssids else "(无管理帧)"))
+    if enc:
+        print("[统计] 加密数据帧: %d 条（仅解析 MAC 头，payload 为密文）" % enc)
+    print("[OK] pcap 解析完成")
+
+
+def make_demo_pcap(path):
+    """用 scapy 生成一段『仿真真实抓包』的混合流量 pcap（管理+控制+数据帧）。"""
+    from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11ProbeReq, Dot11ProbeResp, Dot11Elt, Dot11QoS
+    from scapy.packet import Raw
+    import time
+
+    frames = []
+    # 3 个 AP 的 beacon（不同信道 / 加密属性）
+    aps = [
+        ("Paul-Home-2.4G", "a4:83:e7:11:22:02", 6),
+        ("CoffeeShop-Free", "70:3a:cb:88:99:00", 11),
+        ("TP-LINK_XXXX", "c8:3a:35:12:ab:cd", 1),
+    ]
+    for ssid, bssid, ch in aps:
+        frames.append(
+            RadioTap() /
+            Dot11(type=0, subtype=8, addr1="ff:ff:ff:ff:ff:ff", addr2=bssid, addr3=bssid) /
+            Dot11Beacon(cap=0x1101, beacon_interval=100) /
+            Dot11Elt(ID=0, info=ssid.encode()) /
+            Dot11Elt(ID=1, info=bytes([0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24])) /
+            Dot11Elt(ID=3, info=bytes([ch])) /
+            Dot11Elt(ID=48, info=b"\x01\x00\x00\x0f\xac\x04\x01\x00\x00\x0f\xac\x04\x01\x00\x00\x00\x00")
+        )
+    # 定向 + 广播 probe request（手机主动扫描）
+    frames.append(RadioTap() / Dot11(type=0, subtype=4, addr1="ff:ff:ff:ff:ff:ff",
+                                    addr2="12:34:56:78:9a:bc", addr3="ff:ff:ff:ff:ff:ff") /
+                  Dot11ProbeReq() / Dot11Elt(ID=0, info=b"Paul-Home-2.4G") / Dot11Elt(ID=1, info=bytes([0x82, 0x84, 0x8b, 0x96])))
+    frames.append(RadioTap() / Dot11(type=0, subtype=4, addr1="ff:ff:ff:ff:ff:ff",
+                                    addr2="12:34:56:78:9a:bc", addr3="ff:ff:ff:ff:ff:ff") /
+                  Dot11ProbeReq() / Dot11Elt(ID=0, info=b"") / Dot11Elt(ID=1, info=bytes([0x82, 0x84, 0x8b, 0x96])))
+    # probe response（AP 应答）
+    frames.append(RadioTap() / Dot11(type=0, subtype=5, addr1="12:34:56:78:9a:bc", addr2="a4:83:e7:11:22:02", addr3="a4:83:e7:11:22:02") /
+                  Dot11ProbeResp(beacon_interval=100) /
+                  Dot11Elt(ID=0, info=b"Paul-Home-2.4G") / Dot11Elt(ID=3, info=bytes([6])))
+    # 控制帧：RTS + ACK（信道竞争最常出现）
+    frames.append(RadioTap() / Dot11(type=1, subtype=4, addr1="a4:83:e7:11:22:02", addr2="12:34:56:78:9a:bc"))
+    frames.append(RadioTap() / Dot11(type=1, subtype=6, addr1="12:34:56:78:9a:bc"))
+    # WPA2 加密数据帧（CCMP 头 + 密文）
+    frames.append(RadioTap() / Dot11(type=2, subtype=8, addr1="a4:83:e7:11:22:02",
+                                    addr2="12:34:56:78:9a:bc", addr3="a4:83:e7:11:22:02",
+                                    FCfield=0x40) /
+                  Dot11QoS() /
+                  Raw(load=b"\x00\x00\x00\x00\x00\x00\x00\x00" + b"\x9f\x3a\x7c\x11\x88\xee" + b"\x00" * 24))
+    # 开放网络明文数据帧（无加密，可直接看 payload）
+    frames.append(RadioTap() / Dot11(type=2, subtype=0, addr1="ff:ff:ff:ff:ff:ff",
+                                    addr2="12:34:56:78:9a:bc", addr3="70:3a:cb:88:99:00") /
+                  Raw(load=b"GET /index.html HTTP/1.1\r\nHost: coffee.test\r\n\r\n"))
+
+    from scapy.utils import wrpcap
+    wrpcap(path, frames)
+    return path
+
+
 def show_frame(name, raw):
     print("=" * 70)
     print("[%s] 原始字节 %d 字节" % (name, len(raw)))
@@ -265,29 +477,26 @@ def show_frame(name, raw):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser(description="WiFi 802.11 帧解析器（手写字节级解析）")
+    ap.add_argument("--pcap", metavar="FILE",
+                    help="解析真实抓包 pcap 文件（sudo tcpdump -I -i en0 -w cap.pcap 抓取）")
+    ap.add_argument("--demo", action="store_true", help="生成混合流量演示 pcap 并解析")
+    args = ap.parse_args()
+
+    if args.pcap:
+        print_pcap_report(args.pcap)
+        return
+
+    # 默认：演示模式，生成混合流量 pcap 并解析
     print("#" * 70)
-    print("# WiFi 802.11 数据包解析演示（scapy 生成标准帧 → 手写解析器解析）")
-    print("#")
-    print("# 帧类型说明: 管理帧(beacon/probe)不加密可完整解析;")
-    print("#             数据帧在 WPA2 下加密，无密钥只能解析 MAC 头")
+    print("# 演示模式：scapy 生成『仿真真实抓包』混合流量 → 手写 pcap/802.11 解析")
+    print("# 用法：python3 wifi_frame_parser.py --pcap <真实抓包.pcap>")
     print("#" * 70)
-
-    # 1. Beacon 帧（AP 周期性广播，最常抓到）
-    show_frame("Beacon(AP广播)", make_beacon("Paul-Home-2.4G", "a4:83:e7:11:22:02", 6))
-
-    # 2. Probe Request（手机/设备主动探测）
-    show_frame("ProbeReq(设备探测)", make_probe_req("Paul-Home-2.4G"))
-
-    # 3. Probe Request（广播探测——设备在找曾经连过的所有网络）
-    show_frame("ProbeReq(广播探测)", make_probe_req())
-
-    # 4. WPA2 加密数据帧
-    show_frame("Data(WPA2加密)", make_data_encrypted("a4:83:e7:11:22:02",
-                                                     "3c:06:30:ab:cd:ef",
-                                                     "a4:83:e7:11:22:02"))
-
-    print("=" * 70)
-    print("[OK] 4 类帧全部解析成功")
+    demo = "demo.pcap"
+    make_demo_pcap(demo)
+    print("[生成] 混合流量 pcap: %s\n" % demo)
+    print_pcap_report(demo)
 
 
 if __name__ == "__main__":

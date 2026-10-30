@@ -20,7 +20,7 @@ AIGC:
 | `esp8266_sim.py` | ESP8266 AT 固件模拟器 | 用 pty 创建虚拟串口，预置 8 个虚拟 AP，响应 AT / AT+CWMODE / AT+CWLAP |
 | `ap_parser.c` / `ap_parser.h` | CWLAP 解析库（纯 C） | STM32 核心解析逻辑，无 HAL 依赖，PC 可直接编译测试 |
 | `test_ap_parser.c` | 解析器单元测试 | 6 组用例：正常多 AP / 隐藏 SSID / 转义字符 / 空响应 / 干扰行 / 非法参数 |
-| `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧 |
+| `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；可读 pcap 文件逐帧解析 |
 
 ## 仿真层次
 
@@ -58,6 +58,23 @@ python3 esp8266_sim.py --manual
 按提示用串口工具（如 minicom / CoolTerm / 串口调试助手）连接打印出的虚拟串口路径
 （如 `/dev/ttys007`，波特率无关，pty 无真实波特率），发送 `AT`、`AT+CWMODE=1`、
 `AT+CWLAP` 观察响应。
+
+### 4. 802.11 数据包解析（pcap）
+
+```bash
+# 演示：生成混合流量 pcap（beacon/probe/控制帧/加密数据帧）并逐帧解析
+python3 wifi_frame_parser.py
+
+# 解析真实抓包（macOS 需管理员权限开监听模式）
+sudo tcpdump -I -i en0 -w capture.pcap
+python3 wifi_frame_parser.py --pcap capture.pcap
+```
+
+解析器为纯手写字节级实现（pcap 容器解析 + 802.11 帧解析均不依赖 scapy），支持：
+- 管理帧完整解析：Beacon / Probe Request / Probe Response（SSID、信道、速率、加密能力）
+- 控制帧短帧解析：RTS / CTS / ACK / PS-Poll（RA/TA）
+- 数据帧：解析 MAC 头，WPA2 加密帧标记密文状态（无密钥不解 payload），开放网络明文可读
+- 链路层：Radiotap (127) / 802.11 (105) / Ethernet (1)；pcap 微秒/纳秒与大小端 magic
 
 ## 仿真 vs 真实硬件的差异（务必知晓）
 
