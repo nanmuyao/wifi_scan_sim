@@ -21,6 +21,9 @@ AIGC:
 | `ap_parser.c` / `ap_parser.h` | CWLAP 解析库（纯 C） | STM32 核心解析逻辑，无 HAL 依赖，PC 可直接编译测试 |
 | `test_ap_parser.c` | 解析器单元测试 | 6 组用例：正常多 AP / 隐藏 SSID / 转义字符 / 空响应 / 干扰行 / 非法参数 |
 | `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；可读 pcap 文件逐帧解析 |
+| `stm32_project/` | STM32 完整工程（CubeMX .ioc + 源码） | F103C8T6 + USART1(ESP8266) + USART2(调试)，复用 ap_parser 解析库，修正逐字节接收与 NUL 结尾两处隐患 |
+| `tools/serial_wifi_plot.py` | 串口实时绘图脚本 | 解析 `[i] ch=.. rssi=.. enc=.. ssid=..` 输出，画信道热力图 + RSSI 时间曲线，Ctrl+C 保存 PNG |
+| `docs/采购清单与接线方案.md` | 三档采购清单 + 接线图 | 经济档 ¥70 / 标准档 ¥200 / 进阶档 ¥1300（频谱版） |
 
 ## 仿真层次
 
@@ -69,6 +72,12 @@ python3 wifi_frame_parser.py
 sudo tcpdump -I -i en0 -w capture.pcap
 python3 wifi_frame_parser.py --pcap capture.pcap
 ```
+
+> **macOS 监听模式限制（实测）**：Apple Silicon / 802.11ac+ 网卡不支持真 RFMON，
+> `tcpdump -I -i en0` 虽显示 `link-type IEEE802_11_RADIO` 但收不到任何帧（0 packets），
+> `awdl0` 直接报 `doesn't support monitor mode`。解析器已用 demo.pcap（scapy 构造的
+> Radiotap 混合流量，17 帧全类型）与 en0 真实大流量 pcap（17312 帧容器解析）双重验证。
+> 若要真实 802.11 管理帧，需在支持监听模式的 Linux 机器抓包后拿回解析。
 
 解析器为纯手写字节级实现（pcap 容器解析 + 802.11 帧解析均不依赖 scapy），支持：
 - 管理帧完整解析：
