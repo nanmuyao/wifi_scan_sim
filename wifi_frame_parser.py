@@ -150,6 +150,172 @@ def parse_probe_req(body):
     }
 
 
+# ---------------------------------------------------------------------------
+# 扩展管理帧：Authentication / Deauthentication / Association / Action
+# ---------------------------------------------------------------------------
+AUTH_ALGORITHM = {0: "Open System", 1: "Shared Key", 2: "Fast BSS Transition", 3: "SAE(WPA3)"}
+AUTH_STATUS = {
+    0: "Successful", 1: "Unspecified failure", 2: "Timeout",
+    3: "Can't handle authentication", 4: "Authentication algorithm not supported",
+    5: "Transaction sequence failure", 6: "Challenge failure",
+    7: "Frame too long", 8: "RSN failure", 9: "Pairwise key failure",
+    10: "Group key failure", 11: "AKMP not valid", 12: "Unsupported RSNE version",
+    13: "Invalid RSNE capabilities", 14: "IEEE 802.1X auth failed",
+    15: "Cipher suite rejected", 16: "TDLS rejected", 17: "Pending (SAE)",
+}
+REASON_CODE = {
+    0: "Reserved", 1: "Unspecified reason", 2: "Previous authentication no longer valid",
+    3: "Deauthenticated because sending STA is leaving", 4: "Disassociated due to inactivity",
+    5: "Disassociated because AP unable to handle all currently associated STAs",
+    6: "Class 2 frame received from nonauthenticated STA",
+    7: "Class 3 frame received from nonassociated STA",
+    8: "Disassociated because sending STA is leaving BSS",
+    9: "STA requesting association is not authenticated",
+    10: "Disassociated because the information in the Power Capability IE is unacceptable",
+    11: "Disassociated because the information in the Supported Channels IE is unacceptable",
+    12: "Invalid information element",
+    13: "Message integrity code (MIC) failure",
+    14: "4-Way Handshake timeout", 15: "Group Key Handshake timeout",
+    16: "IE in 4-Way Handshake differs from IE in association request",
+    17: "Invalid group cipher", 18: "Invalid pairwise cipher",
+    19: "Invalid AKMP", 20: "Unsupported RSNE version",
+    21: "Invalid RSNE capabilities", 22: "IEEE 802.1X authentication failed",
+    23: "Cipher suite rejected because of the proposed cipher suite",
+    24: "TDLS direct-link teardown due to timeout", 25: "TDLS direct-link teardown due to malformed frame",
+    26: "TDLS direct-link teardown due to peer unreachable", 27: "TDLS direct-link teardown due to unsupported setup",
+    28: "Disassociated because the AP is leaving BSS", 29: "STA requesting association is not authenticated",
+    30: "Disassociated due to unacceptable WLAN QoS parameters",
+    31: "Needed for robust connection establishment",
+    32: "Prior authentication with SAE failed", 33: "Disassociated due to timeout",
+    34: "Peer MAC address in mesh PLM does not match", 35: "Peer MAC address in mesh PMSA does not match",
+    36: "Peer MAC address in mesh PLMA does not match", 37: "Mesh channel switch is unauthorized",
+    38: "Mesh deployment in progress",
+    39: "Mesh establishment failed due to protocol violation",
+    40: "Mesh establishment failed due to temporarily unavailable resources",
+    41: "Mesh establishment failed due to reachability failure",
+    42: "Mesh proxy service not available", 43: "Mesh proxy service not available for given peer",
+    44: "Mesh PLM not configured", 45: "Mesh PLMA not configured",
+    46: "Mesh PMSA not configured", 47: "Mesh channel switch unauthorized",
+    48: "Mesh establishment failed due to received Disassociation frame",
+}
+ACTION_CATEGORY = {
+    0: "Spectrum Management", 1: "QoS", 2: "DLS", 3: "Block Ack",
+    4: "Public Action", 5: "Radio Measurement", 6: "Fast BSS Transition",
+    7: "HT Action", 8: "SA Query", 9: "Protected Dual of Public Action",
+    10: "WNM", 11: "Unprotected WNM", 12: "TDLS", 13: "Mesh Action",
+    14: "Multihop Action", 15: "Self Protected Action", 16: "DMS Action",
+    17: "WMM Action", 18: "FST Action", 19: "Unprotected Action", 20: "WNM",
+    126: "Vendor Specific Protected", 127: "Vendor Specific",
+}
+
+
+def parse_auth(body):
+    """Authentication 帧体：Algorithm(2) + Transaction Seq(2) + Status(2)。"""
+    if len(body) < 6:
+        return {"error": "Auth frame too short: %d" % len(body)}
+    algo, seq, status = struct.unpack("<HHH", body[0:6])
+    return {
+        "auth_algorithm": AUTH_ALGORITHM.get(algo, "Unknown(%d)" % algo),
+        "auth_seq": seq,
+        "auth_status_code": status,
+        "auth_status": AUTH_STATUS.get(status, "Unknown(%d)" % status),
+    }
+
+
+def parse_deauth(body):
+    """Deauthentication 帧体：Reason(2)。"""
+    if len(body) < 2:
+        return {"error": "Deauth frame too short: %d" % len(body)}
+    reason = struct.unpack("<H", body[0:2])[0]
+    return {
+        "deauth_reason_code": reason,
+        "deauth_reason": REASON_CODE.get(reason, "Unknown(%d)" % reason),
+    }
+
+
+def parse_disassoc(body):
+    """Disassociation 帧体：Reason(2)。"""
+    if len(body) < 2:
+        return {"error": "Disassoc frame too short: %d" % len(body)}
+    reason = struct.unpack("<H", body[0:2])[0]
+    return {
+        "disassoc_reason_code": reason,
+        "disassoc_reason": REASON_CODE.get(reason, "Unknown(%d)" % reason),
+    }
+
+
+def parse_assoc_req(body):
+    """Association Request 帧体：Capability(2) + Listen Interval(2) + Tags。"""
+    if len(body) < 4:
+        return {"error": "AssocReq frame too short: %d" % len(body)}
+    cap, listen = struct.unpack("<HH", body[0:4])
+    tags = parse_tags(body[4:])
+    ssid = tags.get(0, b"")
+    rates = tags.get(1, b"") or tags.get(50, b"")
+    return {
+        "capability": cap,
+        "capability_ess": bool(cap & 0x1), "capability_ibss": bool(cap & 0x2),
+        "capability_privacy": bool(cap & 0x10),
+        "listen_interval": listen,
+        "ssid": ssid.decode("utf-8", "replace") if ssid else "<empty>",
+        "rates_mbps": sorted(r / 2 for r in rates),
+    }
+
+
+def parse_assoc_resp(body):
+    """Association Response 帧体：Capability(2) + Status(2) + AID(2) + Tags。"""
+    if len(body) < 6:
+        return {"error": "AssocResp frame too short: %d" % len(body)}
+    cap, status, aid = struct.unpack("<HHH", body[0:6])
+    tags = parse_tags(body[6:])
+    rates = tags.get(1, b"") or tags.get(50, b"")
+    return {
+        "capability": cap, "capability_ess": bool(cap & 0x1),
+        "status_code": status, "status": AUTH_STATUS.get(status, "Unknown(%d)" % status),
+        "aid": aid & 0x3FFF,
+        "rates_mbps": sorted(r / 2 for r in rates),
+    }
+
+
+def parse_action(body):
+    """Action 帧体：Category(1) + Action Code(1) + 载荷。"""
+    if len(body) < 2:
+        return {"error": "Action frame too short: %d" % len(body)}
+    cat, act = body[0], body[1]
+    return {
+        "action_category": ACTION_CATEGORY.get(cat, "Unknown(%d)" % cat),
+        "action_code": act,
+        "action_payload": body[2:].hex(),
+    }
+
+
+def parse_mgmt_frame(h, body):
+    """按子类型分发管理帧解析。返回 dict 或 None（无帧体解析）。"""
+    if h["subtype"] == 8:      # Beacon
+        return parse_beacon(body)
+    if h["subtype"] == 4:      # Probe Request
+        return parse_probe_req(body)
+    if h["subtype"] == 5:      # Probe Response
+        return parse_beacon(body)
+    if h["subtype"] == 0:      # Association Request
+        return parse_assoc_req(body)
+    if h["subtype"] == 1:      # Association Response
+        return parse_assoc_resp(body)
+    if h["subtype"] == 2:      # Reassociation Request（帧体同 AssocReq）
+        return parse_assoc_req(body)
+    if h["subtype"] == 3:      # Reassociation Response（帧体同 AssocResp）
+        return parse_assoc_resp(body)
+    if h["subtype"] == 11:     # Authentication
+        return parse_auth(body)
+    if h["subtype"] == 12:     # Deauthentication
+        return parse_deauth(body)
+    if h["subtype"] == 10:     # Disassociation
+        return parse_disassoc(body)
+    if h["subtype"] == 13:     # Action
+        return parse_action(body)
+    return None
+
+
 def parse_data_frame(h, payload):
     """数据帧：解析头部 + 加密状态；无密钥时 payload 为密文。"""
     if h["protected"]:
@@ -312,18 +478,17 @@ def parse_pcap_file(path):
                     "addr1", "addr2", "addr3", "seq_num", "protected", "to_ds", "from_ds",
                     "retry", "pwr_mgmt")})
                 body = dot11[24:]
-                if fam == "Management" and sub == "Beacon":
-                    b = parse_beacon(body)
-                    rec["ssid"] = b["ssid"]
-                    rec["channel"] = b["channel"]
-                    rec["rates"] = b["rates_mbps"]
-                elif fam == "Management" and sub == "Probe Request":
-                    b = parse_probe_req(body)
-                    rec["probe_ssid"] = b["ssid"]
-                elif fam == "Management" and sub == "Probe Response":
-                    b = parse_beacon(body)
-                    rec["ssid"] = b["ssid"]
-                    rec["channel"] = b["channel"]
+                if fam == "Management":
+                    m = parse_mgmt_frame(h, body)
+                    if m:
+                        if "error" in m:
+                            rec["error"] = m["error"]
+                        else:
+                            rec.update(m)
+                            if "ssid" in m and "channel" in m:
+                                rec["ssid"] = m["ssid"]
+                                rec["channel"] = m["channel"]
+                                rec["rates"] = m.get("rates_mbps", [])
                 elif fam == "Data":
                     qos_body = body
                     if h["subtype"] in (8, 9, 10, 12, 13, 14) and len(body) >= 2:
@@ -364,17 +529,34 @@ def print_pcap_report(path):
             print("      seq=%d frag=%d retry=%d" % (r["seq_num"], r.get("frag_num", 0), r.get("retry", 0)))
             print("      protected=%d to_ds=%d from_ds=%d pwr_mgmt=%d"
                   % (r["protected"], r["to_ds"], r["from_ds"], r.get("pwr_mgmt", 0)))
-        if "ssid" in r:
+        if "ssid" in r and "channel" in r:
             print("      SSID=%s channel=%s" % (r["ssid"], r["channel"]))
-        if "probe_ssid" in r:
-            print("      探测SSID=%s" % r["probe_ssid"])
+        elif r.get("fam") == "Management" and r.get("sub") == "Probe Request":
+            print("      探测SSID=%s" % r["ssid"])
+        if "auth_algorithm" in r:
+            print("      认证算法=%s  seq=%d  status=%d (%s)"
+                  % (r["auth_algorithm"], r["auth_seq"], r["auth_status_code"], r["auth_status"]))
+        if "deauth_reason" in r:
+            print("      deauth原因=%d (%s)" % (r["deauth_reason_code"], r["deauth_reason"]))
+        if "disassoc_reason" in r:
+            print("      disassoc原因=%d (%s)" % (r["disassoc_reason_code"], r["disassoc_reason"]))
+        if "listen_interval" in r:
+            print("      关联请求: ESS=%s IBSS=%s privacy=%s listen_interval=%d SSID=%s"
+                  % (r["capability_ess"], r["capability_ibss"], r["capability_privacy"],
+                     r["listen_interval"], r.get("ssid", "?")))
+        if "status_code" in r:
+            print("      关联响应: status=%d (%s) AID=%d"
+                  % (r["status_code"], r["status"], r["aid"]))
+        if "action_category" in r:
+            print("      Action: category=%s code=%d payload=%s"
+                  % (r["action_category"], r["action_code"], r["action_payload"]))
         if "encrypted" in r:
             print("      加密=%s payload=%s" % (r["encrypted"], r.get("preview", "")))
     # 统计
     fams = {}
     for r in results:
         fams[r.get("fam", "?")] = fams.get(r.get("fam", "?"), 0) + 1
-    ssids = sorted({r["ssid"] for r in results if "ssid" in r})
+    ssids = sorted({r["ssid"] for r in results if "ssid" in r and "channel" in r})
     enc = sum(1 for r in results if r.get("encrypted"))
     print("=" * 70)
     print("[统计] 帧类型: %s" % ", ".join("%s x%d" % (k, v) for k, v in sorted(fams.items())))
@@ -431,6 +613,32 @@ def make_demo_pcap(path):
     frames.append(RadioTap() / Dot11(type=2, subtype=0, addr1="ff:ff:ff:ff:ff:ff",
                                     addr2="12:34:56:78:9a:bc", addr3="70:3a:cb:88:99:00") /
                   Raw(load=b"GET /index.html HTTP/1.1\r\nHost: coffee.test\r\n\r\n"))
+
+    # 扩展管理帧：认证握手 / 关联 / 去认证 / Action
+    sta, ap = "12:34:56:78:9a:bc", "a4:83:e7:11:22:02"
+    # Authentication：Open System 认证成功（algo=0, seq=1, status=0）
+    frames.append(RadioTap() / Dot11(type=0, subtype=11, addr1=ap, addr2=sta, addr3=ap) /
+                  Raw(load=struct.pack("<HHH", 0, 1, 0)))
+    # Authentication：Shared Key 认证被拒（algo=1, seq=2, status=4 算法不支持）
+    frames.append(RadioTap() / Dot11(type=0, subtype=11, addr1=sta, addr2=ap, addr3=ap) /
+                  Raw(load=struct.pack("<HHH", 1, 2, 4)))
+    # Association Request（cap=0x1101 ESS, listen_interval=100, SSID=Paul-Home-2.4G）
+    assoc_tags = b"\x00" + bytes([len("Paul-Home-2.4G".encode())]) + b"Paul-Home-2.4G" \
+                 + b"\x01\x04\x82\x84\x8b\x96"
+    frames.append(RadioTap() / Dot11(type=0, subtype=0, addr1=ap, addr2=sta, addr3=ap) /
+                  Raw(load=struct.pack("<HH", 0x1101, 100) + assoc_tags))
+    # Association Response：成功（status=0, AID=1）
+    frames.append(RadioTap() / Dot11(type=0, subtype=1, addr1=sta, addr2=ap, addr3=ap) /
+                  Raw(load=struct.pack("<HHH", 0x1101, 0, 0x0001) + b"\x01\x04\x82\x84\x8b\x96"))
+    # Deauthentication：AP 踢出，reason=4（inactivity）
+    frames.append(RadioTap() / Dot11(type=0, subtype=12, addr1=sta, addr2=ap, addr3=ap) /
+                  Raw(load=struct.pack("<H", 4)))
+    # Disassociation：reason=8（sending STA leaving BSS）
+    frames.append(RadioTap() / Dot11(type=0, subtype=10, addr1=sta, addr2=ap, addr3=ap) /
+                  Raw(load=struct.pack("<H", 8)))
+    # Action：Public Action (category=4)，GAS Initial Request (code=0)
+    frames.append(RadioTap() / Dot11(type=0, subtype=13, addr1=ap, addr2=sta, addr3=ap) /
+                  Raw(load=bytes([4, 0, 0x50, 0x6f, 0x9a])))
 
     from scapy.utils import wrpcap
     wrpcap(path, frames)

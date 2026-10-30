@@ -71,7 +71,12 @@ python3 wifi_frame_parser.py --pcap capture.pcap
 ```
 
 解析器为纯手写字节级实现（pcap 容器解析 + 802.11 帧解析均不依赖 scapy），支持：
-- 管理帧完整解析：Beacon / Probe Request / Probe Response（SSID、信道、速率、加密能力）
+- 管理帧完整解析：
+  - Beacon / Probe Request / Probe Response：SSID、信道、速率、加密能力
+  - Authentication：认证算法（Open/Shared Key/SAE）、事务序号、状态码及含义
+  - Association Request / Response：能力、监听间隔、状态码、AID
+  - Deauthentication / Disassociation：原因码及含义（含 MIC 失败、四次握手超时、不活动踢出等）
+  - Action：类别（Spectrum/QoS/Block Ack/Public...）与动作码
 - 控制帧短帧解析：RTS / CTS / ACK / PS-Poll（RA/TA）
 - 数据帧：解析 MAC 头，WPA2 加密帧标记密文状态（无密钥不解 payload），开放网络明文可读
 - 链路层：Radiotap (127) / 802.11 (105) / Ethernet (1)；pcap 微秒/纳秒与大小端 magic
