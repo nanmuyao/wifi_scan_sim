@@ -100,9 +100,8 @@ def track_group(frames, done):
     return out
 
 
-def group_ciphers(frames, done=()):
-    """{BSSID: 组密码套件名}：信标 / 探测响应里 RSN（WPA1 是厂商）元素的组套件，没有信标的抓包退而用（重）关联请求里的。WEP 等不处理的不收。
-    done（可选）：都没有时用 AP 握手里的成对套件当猜测。"""
+def _rsn_field(frames, field, names, done=(), guess=None):
+    """{BSSID: 套件名}：信标 / 探测响应的 RSN（WPA1 是厂商）元素里的某个套件字段，没有信标的抓包退而用（重）关联请求里的。"""
     out, fallback = {}, {}
     for f in frames:
         h = f.h
@@ -111,12 +110,38 @@ def group_ciphers(frames, done=()):
         els, _ = ie.walk(f.body[ie.FIXED_LEN[h["subtype"]]:])
         d = ie.decode_all(els)
         r = d.get("rsn") or d.get("wpa")
-        if r and r.get("group") and r["group"][1] in hs.CIPHERS:
-            # 抓包里没有信标时，关联请求里 STA 声明的组套件就是它要加入的 AP 的组套件
-            (out if h["subtype"] in (5, 8) else fallback).setdefault(h["bssid"], hs.CIPHERS[r["group"][1]][0])
-    for x in done:           # 连关联请求也没抓到：猜组套件 = 成对套件（最常见），猜错了 MIC 过不去，不会解出假明文
-        fallback.setdefault(x.ap, x.cipher)
+        if r and r.get(field) and r[field][1] in names:
+            # 抓包里没有信标时，关联请求里 STA 声明的套件就是它要加入的 AP 的套件
+            (out if h["subtype"] in (5, 8) else fallback).setdefault(h["bssid"], names[r[field][1]])
+    if guess is not None:
+        for x in done:
+            fallback.setdefault(x.ap, guess(x))
     return dict(fallback, **out)
+
+
+def group_ciphers(frames, done=()):
+    """{BSSID: 组密码套件名}：RSN 元素的组套件。WEP 等不处理的不收。
+    done（可选）：信标和关联请求都没有时，用 AP 握手里的成对套件当猜测（最常见；猜错了 MIC 过不去，不会解出假明文）。"""
+    return _rsn_field(frames, "group", {t: v[0] for t, v in hs.CIPHERS.items()}, done, lambda x: x.cipher)
+
+
+def group_mgmt_ciphers(frames):
+    """{BSSID: 组管理套件名（BIP-…）}：RSN 元素的组管理套件（启用 PMF 才有）。"""
+    return _rsn_field(frames, "group_mgmt", {t: v[0] for t, v in dec.BIP_SUITES.items()})
+
+
+def verify_bip(igtks, mgmt_ciphers, frame):
+    """校验一个广播 / 组播管理帧的 MME，用 AP 的 IGTK（按 MME 里的密钥序号、装上时间在帧之前，从新到旧）。
+    返回 "ok" / "bad"（有 IGTK 但不吻合）/ "no_igtk"（没有可用的 IGTK 或不知道套件），帧里没有 MME 返回 None。"""
+    h = frame.h
+    if h["type"] != 0 or h["protected"] or dec.find_mme(frame.body) is None:
+        return None
+    cipher = mgmt_ciphers.get(h["addr2"])
+    key_id = dec.find_mme(frame.body)[0]
+    cands = sorted((k for k in igtks if k.ap == h["addr2"] and k.igtk is not None and k.igtk[0] == key_id and k.n < frame.n), key=lambda k: -k.n)
+    if cipher is None or not cands:
+        return "no_igtk"
+    return "ok" if any(dec.verify_bip(k.igtk[2], cipher, frame)[0] for k in cands) else "bad"
 
 
 def decrypt_group(keys, ciphers, frame):

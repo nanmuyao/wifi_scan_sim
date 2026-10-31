@@ -10,6 +10,7 @@ CCMP / GCMP 帧体 = 8 字节头 ‖ 密文 ‖ MIC（CCMP-128 8 字节，CCMP-2
 import struct
 
 import crypto80211 as c
+import kdf80211 as kdf
 
 MIC_LEN = {"CCMP-128": 8, "CCMP-256": 16, "GCMP-128": 16, "GCMP-256": 16}
 
@@ -137,3 +138,49 @@ def decrypt_wep(wep, frame):
         if ok:
             return pt, k
     return None
+
+
+# ---------------------------------------------------------------------------
+# BIP：广播 / 组播管理帧的完整性（不加密，帧末尾带 Management MIC 元素）
+# ---------------------------------------------------------------------------
+# 组管理套件类型（00-0F-AC:n）-> (名字, IGTK 字节数, MIC 字节数)
+BIP_SUITES = {6: ("BIP-CMAC-128", 16, 8), 11: ("BIP-GMAC-128", 16, 16), 12: ("BIP-GMAC-256", 32, 16), 13: ("BIP-CMAC-256", 32, 16)}
+BIP_BY_NAME = {v[0]: v for v in BIP_SUITES.values()}
+MME_ID = 76
+
+
+def find_mme(body):
+    """帧体末尾的 Management MIC 元素：[76, 长度, 密钥序号(2，小端), IPN(6), MIC]。返回 (密钥序号, IPN, MIC, MIC 在帧体里的偏移)，没有返回 None。
+    长度 16 = MIC 8 字节，24 = MIC 16 字节（两者都从末尾往前认）。"""
+    for mic_len in (8, 16):
+        n = 8 + mic_len
+        if len(body) >= 2 + n and body[-(2 + n)] == MME_ID and body[-(1 + n)] == n:
+            p = len(body) - n
+            return body[p] | body[p + 1] << 8, body[p + 2:p + 8], body[p + 8:], p + 8
+    return None
+
+
+def verify_bip(igtk, cipher, frame):
+    """校验一个广播 / 组播管理帧的 MME。返回 (MIC 是否吻合, 密钥序号, IPN)，帧里没有 MME 返回 None。
+    被保护的内容：AAD = 帧控制（重试 / 省电 / 更多数据清零）‖ A1 ‖ A2 ‖ A3，后面接帧体（MME 的 MIC 字段清零）。
+    CMAC：AES-CMAC(IGTK, AAD ‖ 帧体)，取前 8 / 16 字节；GMAC：AES-GCM 无明文，IV = A2 ‖ IPN（高位在前），AAD 同上，tag 16 字节。"""
+    found = find_mme(frame.body)
+    if found is None:
+        return None
+    key_id, ipn, mic, off = found
+    name, key_len, mic_len = BIP_BY_NAME[cipher]
+    if len(igtk) != key_len or len(mic) != mic_len:
+        return False, key_id, ipn
+    body = frame.body[:off] + bytes(mic_len)
+    fc = bytearray(frame.dot11[:2])
+    fc[1] &= ~(0x08 | 0x10 | 0x20) & 0xFF
+    aad = bytes(fc) + frame.dot11[4:22]
+    if name.startswith("BIP-CMAC"):
+        calc = kdf.aes_cmac(igtk, aad + body, mic_len)
+    else:
+        calc = c.gcm_encrypt(igtk, frame.dot11[10:16] + ipn[::-1], aad + body, b"", 16)
+    return _eq(calc, mic), key_id, ipn
+
+
+def _eq(a, b):
+    return len(a) == len(b) and c._const_eq(a, b)

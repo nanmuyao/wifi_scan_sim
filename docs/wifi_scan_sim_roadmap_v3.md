@@ -308,7 +308,19 @@ wep.pcapng 的 11 帧（10 数据 + 1 认证）与 tshark 明文逐字节相同�
 **测试**：`tests/test_decrypt.py` 的独立构造扩到管理帧（5 种套件 / 子类型）和 WEP（pycryptodome 的 ARC4 + zlib.crc32）；对这部分的 11 个改动做变异检查，起初 2 个存活——
 一个是 `wep_keys` 没真正过滤非 WEP 条目（测试里的反例本身不是合法十六进制，所以过滤与否都一样），换成合法十六进制的 wpa-psk 后抓住；
 另一个是 `decrypt_wep` 里多余的帧类型判断，ICV 校验已足够，删掉了。
-**没做**：BIP（组播管理帧的 MME 完整性，用 IGTK）——样例里只有 3 帧带 MME 元素（wpa3-mlo 2 帧、wpa3-suiteb-192 1 帧），要先看 tshark 对它们说了什么才能定验证方式，留作下一小步；管理帧带 HT 控制（顺序位）时 AAD 怎么处理，规范没有样例可对，保持不屏蔽。
+**BIP**（D4c-6，见下）已补上；管理帧带 HT 控制（顺序位）时 AAD 怎么处理，规范没有样例可对，保持不屏蔽。
+
+### BIP：广播 / 组播管理帧的完整性（D4c-6）
+这类帧不加密，帧末尾带 Management MIC 元素（76）：密钥序号(2) ‖ IPN(6) ‖ MIC；用 IGTK（M3 / G1 的 Key Data 里的 IGTK KDE）保护。
+`decrypt80211.verify_bip`：被保护的是 AAD = 帧控制（重试 / 省电 / 更多数据清零）‖ A1 ‖ A2 ‖ A3，后接帧体（MIC 字段清零）。
+CMAC 套件：AES-CMAC(IGTK, AAD ‖ 帧体)，BIP-CMAC-128 取前 8 字节、BIP-CMAC-256（32 字节密钥）取 16 字节；GMAC 套件：AES-GCM 无明文，IV = A2 ‖ IPN（高位在前，帧里是小端所以要反过来），tag 16 字节。
+套件取自 RSN 元素的组管理套件（6 = CMAC-128、11 = GMAC-128、12 = GMAC-256、13 = CMAC-256）。
+**验证**：tshark 只显示 MME 不校验，所以没有它的答案可对。样例里带 MME 的帧我们找到的个数与 tshark 一致（wpa3-mlo 2、wpa3-suiteb-192 1，共 3 帧）；
+suiteb 的 1 个 BIP-GMAC-256 解除认证帧，用 M3 解出的 IGTK 校验通过——**真实 MIC 吻合**。起初我把套件号弄错（以为 12 是 CMAC-256），用 CMAC 怎么算都对不上，
+看到 beacon 里组管理套件是 12 才改成 GMAC-256（12 = GMAC-256、13 = CMAC-256）；GMAC 的 IV 字节序（A2 ‖ IPN 反过来）是在这个真实帧上六种组合里试出唯一吻合的。
+wpa3-mlo 的 2 个信标没有可用的 IGTK（多链路的 IGTK 在另一种 KDE 里），不能判断。
+**CMAC-128 / CMAC-256 / GMAC-128 没有真实帧**：用 pycryptodome 的 CMAC / GCM 独立构造，消息构造（AAD、清零的 MIC）与真实帧上验证过的 GMAC-256 是同一套，算法本身有 RFC 4493 / NIST 向量。
+对 BIP 代码的 18 个改动做变异检查，全部被抓住。
 
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
