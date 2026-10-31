@@ -43,5 +43,21 @@ for rel in ("tests/fixtures/wpa2_handshake.pcap", "wifi_demo_parse.pcap", "demo.
     check(r["error"] is None and r["frames"] == r["ours_frames"] > 0 and bad == 0,
           "%s：%d 帧，不一致/没解析共 %d" % (rel, r["frames"], bad))
 
+print("== 合成的头部变体（4 地址、QoS、HT Control、分片等），tshark 当标准答案 ==")
+import tempfile  # noqa: E402
+import synth  # noqa: E402
+with tempfile.TemporaryDirectory() as tmp:
+    cases = synth.cases()
+    path = os.path.join(tmp, "synth.pcap")
+    synth.write_pcap(path, [c[1] for c in cases])
+    r = diff.diff_file(path)
+    check(r["error"] is None and r["frames"] == r["ours_frames"] == len(cases), "%d 帧都能读出" % len(cases))
+    for field, v in r["stats"].items():
+        check(v["diff"] == 0 and v["missing"] == 0, "%s：一致 %d / 不一致 %d / 没解析 %d" % (field, v["ok"], v["diff"], v["missing"]))
+    bad = [d for d in r["details"]]
+    names = [c[0] for c in cases]
+    for n, field, want, got in bad[:5]:
+        print("      %s 帧 %d(%s) tshark=%r 我们=%r" % (field, n, names[n - 1], want, got))
+
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)

@@ -78,7 +78,15 @@ def mac_str(raw):
 
 
 def parse_mac_header(buf):
-    """解析 24 字节 802.11 MAC 头，返回结构化字段。"""
+    """解析 802.11 MAC 头（管理帧和数据帧），头长度随帧而变：
+
+        24 字节基本头
+        + 6   addr4，数据帧且 ToDS=FromDS=1（4 地址，WDS / mesh）
+        + 2   QoS Control，QoS 数据帧（子类型的第 3 位为 1）
+        + 4   HT Control，Order 位为 1 且帧是 QoS 数据帧或管理帧
+    header_len 是实际长度，帧体从 buf[header_len:] 开始。控制帧是短帧，用 parse_ctrl_short。
+
+    另外给出按 ToDS / FromDS 对应出来的 da、sa、bssid（4 地址帧没有 bssid）。"""
     if len(buf) < 24:
         raise ValueError("MAC header too short: %d" % len(buf))
     fc, duration = struct.unpack("<HH", buf[0:4])
@@ -89,10 +97,44 @@ def parse_mac_header(buf):
     f = parse_frame_control(fc)
     hdr = {
         "fc": fc, "duration": duration,
-        "addr1": addr1, "addr2": addr2, "addr3": addr3,
+        "addr1": addr1, "addr2": addr2, "addr3": addr3, "addr4": None,
         "seq_num": (seq >> 4) & 0xFFF, "frag_num": seq & 0xF,
+        "qos": None, "htc": None,
     }
     hdr.update(f)
+
+    is_data = f["type"] == 2
+    off = 24
+    if is_data and f["to_ds"] and f["from_ds"]:
+        off += 6
+    has_qos = is_data and bool(f["subtype"] & 8)
+    has_htc = bool(f["order"]) and (has_qos or f["type"] == 0)
+    need = off + (2 if has_qos else 0) + (4 if has_htc else 0)
+    if len(buf) < need:
+        raise ValueError("MAC header too short: %d < %d" % (len(buf), need))
+    if is_data and f["to_ds"] and f["from_ds"]:
+        hdr["addr4"] = mac_str(buf[24:30])
+    if has_qos:
+        q = struct.unpack("<H", buf[off:off + 2])[0]
+        hdr["qos"] = {"tid": q & 0xF, "eosp": (q >> 4) & 1, "ack_policy": (q >> 5) & 3,
+                      "amsdu": (q >> 7) & 1, "upper": q >> 8}
+        off += 2
+    if has_htc:
+        hdr["htc"] = struct.unpack("<I", buf[off:off + 4])[0]
+        off += 4
+    hdr["header_len"] = off
+
+    if is_data:                               # 地址含义由 ToDS / FromDS 决定
+        if f["to_ds"] and f["from_ds"]:
+            hdr.update(da=addr3, sa=hdr["addr4"], bssid=None)
+        elif f["to_ds"]:
+            hdr.update(da=addr3, sa=addr2, bssid=addr1)
+        elif f["from_ds"]:
+            hdr.update(da=addr1, sa=addr3, bssid=addr2)
+        else:
+            hdr.update(da=addr1, sa=addr2, bssid=addr3)
+    else:                                     # 管理帧：DA / SA / BSSID
+        hdr.update(da=addr1, sa=addr2, bssid=addr3)
     return hdr
 
 
@@ -472,9 +514,12 @@ def parse_pcap_file(path):
             else:
                 h = parse_mac_header(dot11)
                 rec.update({k: h[k] for k in (
-                    "addr1", "addr2", "addr3", "seq_num", "frag_num", "duration", "protected",
+                    "addr1", "addr2", "addr3", "addr4", "da", "sa", "bssid", "header_len", "htc",
+                    "seq_num", "frag_num", "duration", "protected",
                     "to_ds", "from_ds", "retry", "pwr_mgmt", "more_frag", "more_data", "order")})
-                body = dot11[24:]
+                if h["qos"]:
+                    rec.update({"qos_" + k: v for k, v in h["qos"].items()})
+                body = dot11[h["header_len"]:]
                 if fam == "Management":
                     m = parse_mgmt_frame(h, body)
                     if m:
@@ -487,10 +532,9 @@ def parse_pcap_file(path):
                                 rec["channel"] = m["channel"]
                                 rec["rates"] = m.get("rates_mbps", [])
                 elif fam == "Data":
-                    qos_body = body
-                    if h["subtype"] & 8 and len(body) >= 2:
-                        qos_body = body[2:]  # QoS Data 帧体开头有 2 字节 QoS Control
-                    r = parse_data_frame(h, qos_body)
+                    if not h["protected"] and len(body) >= 3:
+                        rec["llc_dsap"] = body[0]    # 明文数据帧体以 LLC/SNAP 开头；差分测试借它验证头长度
+                    r = parse_data_frame(h, body)
                     rec["encrypted"] = r["encrypted"]
                     rec["preview"] = r["payload_preview"]
         except Exception as e:
@@ -656,7 +700,7 @@ def show_frame(name, raw):
     print("  [MAC 头] addr3(BSSID)=%s" % h["addr3"])
     print("  [MAC 头] seq=%d  frag=%d  retry=%d" % (h["seq_num"], h["frag_num"], h["retry"]))
     print("  [MAC 头] protected=%d  to_ds=%d  from_ds=%d" % (h["protected"], h["to_ds"], h["from_ds"]))
-    body = dot11[24:]
+    body = dot11[h["header_len"]:]
     if h["type"] == 0 and h["subtype"] == 8:
         b = parse_beacon(body)
         print("  [Beacon] timestamp=%d  interval=%dTU  ESS=%s  IBSS=%s  privacy=%s"

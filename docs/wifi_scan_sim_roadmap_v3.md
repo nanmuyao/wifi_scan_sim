@@ -40,7 +40,13 @@
 
 ### 阶段 B0 之后的数字
 24 个样例全部能打开；6461 帧里，类型 / 子类型、RA、TA、序号、分片号、时长，以及 Frame Control 的 8 个标志位，与 tshark **0 不一致、0 漏解析**。
-还没对照的帧层内容：addr3 / addr4（4 地址帧）、QoS 控制字段、HT 控制字段、radiotap 各字段，下一步做。
+### 帧头变体（B1）
+24 个样例里 4 地址帧是 0 个、HT 控制字段 2 个、A-MSDU 1 个、分片 1 个，覆盖不到。所以用 `tests/oracle/synth.py`
+按标准的字段布局手工拼了 31 种帧头（4 种 ToDS/FromDS 组合、TID 0-7、确认策略、EOSP、A-MSDU、HT 控制字段、
+分片 12/13 等），仍让 tshark 当标准答案。`parse_mac_header` 改成变长帧头（addr4 / QoS Control / HT Control，
+并给出 DA / SA / BSSID）；24 个样例和 31 种合成帧头与 tshark 全部一致，帧体起点用 tshark 找到的 LLC 头独立验证。
+**遗留**：`wpa2_handshake.py` 的 CCMP AAD 构造仍按 3 地址帧（24/26 字节）算，4 地址帧和带 HT 控制字段的帧要在阶段 D 一并改。
+还没对照的帧层内容：radiotap 各字段、A-MSDU 内部结构、Action 帧各类别，下一步做。
 
 ## 2. 验证方法（贯穿所有阶段）
 

@@ -33,6 +33,14 @@ FIELDS = [
     ("pwrmgt", "wlan.fc.pwrmgt"),
     ("moredata", "wlan.fc.moredata"),
     ("order", "wlan.fc.order"),
+    ("da", "wlan.da"),
+    ("sa", "wlan.sa"),
+    ("bssid", "wlan.bssid"),
+    ("priority", "wlan.qos.priority"),
+    ("ackpolicy", "wlan.qos.ack"),
+    ("amsdu", "wlan.qos.amsdupresent"),
+    ("htc", "wlan.htc"),
+    ("llc_dsap", "llc.dsap"),      # tshark 在帧体里找到的 LLC：我们的头长度错了，读到的首字节就对不上
 ]
 TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number")]
 TSHARK_MAJOR_MINOR = "4.4"
@@ -49,9 +57,11 @@ def _norm(name, v):
         return None
     if name == "type_subtype":
         return int(v, 16)
-    if name in ("seq", "duration", "frag"):
+    if name in ("seq", "duration", "frag", "priority"):
         return int(v)
-    if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order"):
+    if name in ("ackpolicy", "htc", "llc_dsap"):
+        return int(v, 0)
+    if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu"):
         return v == "True"
     return v
 
@@ -106,6 +116,14 @@ def ours_frames(path):
             "pwrmgt": None if "pwr_mgmt" not in r else bool(r["pwr_mgmt"]),
             "moredata": None if "more_data" not in r else bool(r["more_data"]),
             "order": None if "order" not in r else bool(r["order"]),
+            "da": r.get("da"),
+            "sa": r.get("sa"),
+            "bssid": r.get("bssid"),
+            "priority": None if r.get("qos_tid") is None else r["qos_tid"] & 7,   # tshark 的 Priority 是 TID 的低 3 位
+            "ackpolicy": r.get("qos_ack_policy"),
+            "amsdu": None if "qos_amsdu" not in r else bool(r["qos_amsdu"]),
+            "htc": r.get("htc"),
+            "llc_dsap": r.get("llc_dsap"),
         })
     return out
 
