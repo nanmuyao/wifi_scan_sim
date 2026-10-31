@@ -16,6 +16,7 @@ run "WPA2 握手 / CCMP" python3 tests/test_wpa2_handshake.py
 for t in esp32_project/tests/test_esp32_*.py; do
     run "$t" bash -c "cd esp32_project/tests && python3 $(basename "$t")"
 done
+run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "固件接收链路仿真（真实 main.c <-> esp8266_sim，含故障注入）" python3 tests/test_sim_chain.py
 
 echo; echo "################ 汇总"
