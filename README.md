@@ -57,6 +57,7 @@ AIGC:
 | 文件 | 角色 | 说明 |
 |------|------|------|
 | `esp8266_sim.py` | ESP8266 AT 固件模拟器 | 用 pty 创建虚拟串口，预置 8 个虚拟 AP，响应 AT / AT+CWMODE / AT+CWLAP；阶段 2 扩展：AT+CWSNIFF 开关 promiscuous **嗅探仿真**（FAKE_PROBES 预置伪造 Probe Request，经 pty 虚拟串口主动推送报告），仅用于学习 promiscuous 模式与报告格式，**不读取任何真实网络流量**，支持 `--sniffer-demo` 一键演示 |
+| `Dockerfile` / `tests/docker.sh` / `tests/run_all.sh` | Docker 测试环境与一键脚本 | gcc + Python + pycryptodome + scapy 固定版本；`bash tests/docker.sh` 跑全部测试 |
 | `ap_parser.c` / `ap_parser.h` | CWLAP 解析库（纯 C） | STM32 核心解析逻辑，无 HAL 依赖，PC 可直接编译测试 |
 | `test_ap_parser.c` | 解析器单元测试 | 7 组用例：正常多 AP / 隐藏 SSID / 转义字符 / 空响应 / 干扰行 / 非法参数 / AT 响应收尾判定 |
 | `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；可读 pcap 文件逐帧解析 |
@@ -90,18 +91,54 @@ gcc -o test_ap_parser test_ap_parser.c ap_parser.c
 ./test_ap_parser
 ```
 
-### 1b. 固件接收链路仿真测试（Docker）
+### 0. 一键跑全部测试（Docker）
 
-把 `stm32_project/Core/Src/main.c` 的**真实代码**（接收回调、`esp_wait`、`parse_cwlap`）
-加一层 HAL 桩编译到 PC，经虚拟串口连到 `esp8266_sim.py`，扫满 3 轮后逐项比对 8 个 AP，
-同时检查接收中断有无溢出。需要 Docker：
+不需要在宿主机装 gcc / Python 库（macOS 上没有 gcc）。只需要 Docker：
 
 ```bash
-bash tests/sim_chain/run.sh
+bash tests/docker.sh                                      # 全部测试，最后汇总
+bash tests/docker.sh python3 tests/test_sim_chain.py      # 只跑某一项
+bash tests/docker.sh bash                                 # 进容器交互
 ```
 
-用旧版 `main.c`（帧结束判断错误）跑同一个测试会因握手永远完不成而触发看门狗超时，
-说明测试能抓到这类问题。
+环境见根目录 `Dockerfile`（python:3.12-slim + gcc + pycryptodome 4.0.0 + scapy 2.7.0，
+依赖固定在发布满两周以上的版本）。仓库以卷挂载进容器，改完代码直接重跑，不用重建镜像。
+`tests/run_all.sh` 依次跑：C 解析器单测、根目录与 STM32 工程的 `ap_parser` 是否一致、
+WPA2 握手/CCMP、ESP32 的 4 个测试文件、固件接收链路仿真；每项独立，某项失败不挡后面的。
+
+### 1b. 固件接收链路仿真测试
+
+把 `stm32_project/Core/Src/main.c` 的**真实代码**（接收回调、`esp_wait`、`parse_cwlap`）
+加一层 HAL 桩编译到 PC，经虚拟串口连到 `esp8266_sim.py`，按真实线速（115200 波特）
+逐字节送进接收回调，扫满 3 轮后逐项比对 AP。同一份固件按场景表跑多遍，
+故障由 `ESP8266Sim(faults=...)` 注入，固件和 harness 不变：
+
+| 场景 | 注入 | 期望 |
+|---|---|---|
+| baseline | 无 | 3 轮都解析出 8 个 AP |
+| 回显 + 噪声行 | `echo` `noise`：先回显命令、响应前混入 `ready` / `busy p...` | 同上 |
+| 逐字节分片 | `chunk=1`：每次只吐 1 字节，`OK` 行被拆在多次回调里 | 同上 |
+| ERROR | `cwlap=["error"]`：第 1 次 CWLAP 只回 ERROR | 第 1 轮无 AP、打印 `scan timeout`，之后恢复 |
+| 无应答 | `cwlap=["silent"]`：模块卡死，固件等满 5s | 同上 |
+| 超长响应 | `cwlap=["oversize"]`：超过 4096 字节接收缓冲 | 不崩、不越界，下一轮恢复 |
+| AP 过多 | `aps=` 20 个 | 只保存前 16 个（`MAX_AP_T`） |
+| FAIL 收尾 | `cwlap=["fail"]`：前面的行里有 SSID `OK-Cafe`，以 FAIL 结尾 | 判失败：第 1 轮无 AP、打印 `scan timeout` |
+
+这个场景抓出过一个固件 bug：`esp_wait` 曾用 `strstr(buf, "OK")` 判成功，响应里任何地方出现
+"OK"（比如一个叫 `OK-Cafe` 的 AP）都会被当成成功，即使这次扫描以 FAIL 收尾。现在改用
+`at_response_ok()` 只看终止行。链路测试支持“已知问题”标记（XFAIL / XPASS），暂时没有用到。
+
+用变异检验过这些场景能抓到问题：判帧改回“见换行就算结束”（旧 bug）、去掉 AP 数量上限、
+`esp_wait` 不清缓冲、回调里不重挂接收、缓冲写满后继续写，各自都会让对应场景变红。
+
+**仿真测不了的**：中断处理“够不够快”。F103 的 USART 只有 1 字节数据寄存器，回调超过一个字节
+时间（87us）就会丢字节；在主机上量回调耗时没有可靠阈值（容器里线程会被调度走，CPU 时间
+量出来基线就有十几微秒，而 MCU 上的 87us 对应到这里只有几百纳秒），这类问题要真机或
+Renode / qemu。harness 只能检出“回调没有重挂接收”这种结构性问题。
+
+```bash
+bash tests/sim_chain/run.sh      # 等价于 bash tests/docker.sh python3 tests/test_sim_chain.py
+```
 
 ### 2. 自动演示：模拟器 + 客户端全流程
 

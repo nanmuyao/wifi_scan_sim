@@ -61,12 +61,29 @@ FAKE_PROBES = [
 
 
 class ESP8266Sim:
-    """模拟 ESP8266 AT 固件行为。"""
+    """模拟 ESP8266 AT 固件行为。
 
-    def __init__(self, fd):
+    faults（可选，默认 None = 永远完美应答，行为与旧版一致）用于故障注入，
+    让固件接收链路遇到真实模块会出的怪情况：
+      echo         True：像 ATE1 默认那样先回显收到的命令（"AT+CWLAP\\r\\r\\n"）
+      noise        True：每条响应前混入无关行（ready / busy p...）
+      chunk        N：每次 poll 最多吐 N 字节（模拟慢速/分片到达，0 = 立即写）
+      aps          覆盖 FAKE_APS 的 AP 列表
+      cwlap        每次 AT+CWLAP 的行为脚本，按顺序消费，用完后恢复 "ok"：
+                     "ok"        正常列表 + OK
+                     "error"     只回 ERROR
+                     "silent"    不回任何东西（模块卡死 / 掉线）
+                     "fail"      先吐几行（含 SSID "OK-Cafe"）再以 FAIL 收尾
+                     "oversize"  吐出超过固件 4096 字节接收缓冲的内容
+    """
+
+    def __init__(self, fd, faults=None):
         self.fd = fd
         self.buf = b""
         self.scan_count = 0
+        self.faults = dict(faults or {})
+        self._cwlap_script = list(self.faults.get("cwlap", []))
+        self._outq = b""
         # 阶段 2 嗅探仿真状态
         self.sniff_enabled = False
         self._sniff_idx = 0
@@ -74,25 +91,63 @@ class ESP8266Sim:
         self._sniff_interval = 0.35   # 真实 promiscuous 回调异步高频，压频便于演示
 
     def _send(self, data):
-        """统一写响应：兼容 str / bytes，避免 os.write 类型错误。"""
+        """统一写响应：兼容 str / bytes，避免 os.write 类型错误。
+
+        注入了 chunk 时先进队列，由 poll() 按字节数放行；否则立即写。
+        """
         if isinstance(data, str):
             data = data.encode("utf-8")
-        os.write(self.fd, data)
+        if self.faults.get("chunk"):
+            self._outq += data
+        else:
+            os.write(self.fd, data)
+
+    def _drain(self):
+        n = self.faults.get("chunk")
+        if n and self._outq:
+            part, self._outq = self._outq[:n], self._outq[n:]
+            os.write(self.fd, part)
+
+    def _cwlap_response(self):
+        mode = self._cwlap_script.pop(0) if self._cwlap_script else "ok"
+        aps = self.faults.get("aps", FAKE_APS)
+        if mode == "silent":
+            return
+        if mode == "error":
+            self._send(b"ERROR\r\n")
+            return
+        if mode == "fail":
+            for ap in ((3, "OK-Cafe", -40, "00:11:22:33:44:55", 1),) + tuple(aps[:2]):
+                self._send('+CWLAP:(%d,"%s",%d,"%s",%d)\r\n' % ap)
+            self._send(b"\r\nFAIL\r\n")
+            return
+        if mode == "oversize":
+            # 约 60 字节/行 * 100 行 > 4096：固件缓冲写满后 OK 收不到
+            for i in range(100):
+                self._send('+CWLAP:(3,"Flood-%03d",-60,"aa:bb:cc:00:%02x:%02x",6)\r\n'
+                           % (i, i // 256, i % 256))
+            self._send(b"\r\nOK\r\n")
+            return
+        for ap in aps:
+            enc, ssid, rssi, mac, ch = ap
+            # 与真实模块输出格式完全一致
+            self._send('+CWLAP:(%d,"%s",%d,"%s",%d)\r\n'
+                       % (enc, ssid, rssi, mac, ch))
+        self._send(b"OK\r\n")
 
     def _handle_line(self, line: bytes):
         cmd = line.strip().decode("utf-8", "ignore")
+        if self.faults.get("echo"):
+            self._send(cmd + "\r\r\n")          # 真实模块默认回显（ATE1）
+        if self.faults.get("noise"):
+            self._send(b"\r\nbusy p...\r\n" if cmd == "AT+CWLAP" else b"\r\nready\r\n")
         if cmd == "AT":
             self._send(b"OK\r\n")
         elif cmd.startswith("AT+CWMODE"):
             self._send(b"OK\r\n")
         elif cmd == "AT+CWLAP":
             self.scan_count += 1
-            for ap in FAKE_APS:
-                enc, ssid, rssi, mac, ch = ap
-                # 与真实模块输出格式完全一致
-                self._send('+CWLAP:(%d,"%s",%d,"%s",%d)\r\n'
-                           % (enc, ssid, rssi, mac, ch))
-            self._send(b"OK\r\n")
+            self._cwlap_response()
         elif cmd.startswith("AT+CWSNIFF"):
             # 阶段 2：promiscuous 嗅探开关（仿真扩展命令）
             arg = cmd.split("=", 1)[1].strip() if "=" in cmd else ""
@@ -134,6 +189,7 @@ class ESP8266Sim:
         嗅探事件异步推送不依赖主机输入，因此每次 poll 先执行推送，
         再处理输入；避免无输入时过早 return 导致 probe 永远不发出。
         """
+        self._drain()
         self._emit_probe_if_due()
         try:
             r, _, _ = select.select([self.fd], [], [], 0)

@@ -14,6 +14,7 @@
  *       -o harness tests/sim_chain/harness.c ap_parser.c -lpthread
  */
 #include <fcntl.h>
+#include <poll.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -26,7 +27,7 @@
 #include "main.h"
 
 #define SCAN_TARGET  3        /* 扫满这么多轮后正常退出 */
-#define BYTE_US      87       /* 115200 8N1 约 87us/字节，模拟真实线速 */
+#define BYTE_NS      86806L   /* 115200 8N1：10 位/字节 = 86.8us，模拟真实线速 */
 #define WATCHDOG_S   20
 
 #define main fw_main
@@ -98,15 +99,44 @@ int HAL_UART_Receive_IT(UART_HandleTypeDef *huart, uint8_t *data, uint16_t len)
 }
 
 /* ---------- 扮演串口接收中断 ---------- */
+/* 模型：
+ *   - 字节按真实线速（115200 8N1，86.8us/字节）到达，连续数据一个紧跟一个
+ *   - 字节到达时 Receive_IT 没有挂起（回调没重挂）-> 真机上会丢字节，计一次溢出
+ * 测不了的：中断处理「够不够快」。F103 的 USART 只有 1 字节数据寄存器，回调超过一个字节时间
+ * 就会丢字节，但在主机上量回调耗时没有可靠的阈值（容器里线程随时被调度走，墙钟是假的；
+ * CPU 时间量出来基线就有十几微秒，而 MCU 上的 87us 在这里只有几百纳秒），这一项要真机或
+ * 指令级模拟器（Renode / qemu）。
+ * 旧版用「读一个、调回调、usleep(87)」：usleep(87) 在容器里实际睡 ~1ms，整体只有 ~1KB/s，
+ * 比真实线速慢 10 倍，超长响应的尾巴会拖到下一轮才到。 */
+static long long now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
 static void *rx_isr_thread(void *arg)
 {
     (void)arg;
     uint8_t b;
+    long long prev_arrive = 0;   /* 上一个字节到达线上的时刻 */
     for (;;) {
-        ssize_t n = read(serial_fd, &b, 1);
-        if (n <= 0) {
+        struct pollfd pf = { .fd = serial_fd, .events = POLLIN };
+        long long arrive;
+        if (poll(&pf, 1, 0) > 0) {
+            arrive = prev_arrive + BYTE_NS;     /* 数据在排队：紧跟上一个字节 */
+        } else {
+            if (poll(&pf, 1, -1) <= 0) {
+                continue;
+            }
+            arrive = now_ns();                  /* 空闲后来的第一个字节：现在到 */
+        }
+        if (read(serial_fd, &b, 1) != 1) {
             usleep(1000);
             continue;
+        }
+        prev_arrive = arrive;
+        while (now_ns() < arrive) {             /* 等到这个字节真正到达线上 */
         }
         if (atomic_exchange(&rx_armed, 0)) {
             *rx_dst = b;
@@ -114,7 +144,6 @@ static void *rx_isr_thread(void *arg)
         } else {
             atomic_fetch_add(&overruns, 1);     /* 没挂起 -> 真机上会丢字节 */
         }
-        usleep(BYTE_US);
     }
     return NULL;
 }
