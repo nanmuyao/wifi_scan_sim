@@ -156,6 +156,31 @@ int parse_cwlap(const char *buf, ap_info_t *aps, int max_aps)
     return count;
 }
 
+/* buf 末尾是否为独立成行的 tok（前一字符是换行或缓冲起点） */
+static int ends_with_token(const char *buf, int len, const char *tok)
+{
+    int tl = (int)strlen(tok);
+    if (len < tl || memcmp(buf + len - tl, tok, (size_t)tl) != 0) {
+        return 0;
+    }
+    return len == tl || buf[len - tl - 1] == '\n';
+}
+
+/* 判断 AT 响应是否收完。响应字节连续到达，不能靠"换行前有空闲间隔"判尾，
+ * 而要看终止行：OK / ERROR / FAIL。 */
+int at_response_complete(const char *buf, int len)
+{
+    if (!buf || len <= 0 || buf[len - 1] != '\n') {
+        return 0;
+    }
+    while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n')) {
+        len--;
+    }
+    return ends_with_token(buf, len, "OK") ||
+           ends_with_token(buf, len, "ERROR") ||
+           ends_with_token(buf, len, "FAIL");
+}
+
 /* 格式化打印一个 AP（STM32 侧可换成 HAL_UART_Transmit 输出） */
 void ap_print(const ap_info_t *ap)
 {

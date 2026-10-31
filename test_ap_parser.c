@@ -19,6 +19,8 @@
 
 #include "ap_parser.h"
 
+#define AT_DONE(s) at_response_complete((s), (int)strlen(s))
+
 #define MAX_AP 32
 
 static int failures = 0;
@@ -93,6 +95,21 @@ int main(void)
     check(parse_cwlap(NULL, aps, MAX_AP) == 0, "NULL 输入安全返回 0");
     check(parse_cwlap("+CWLAP:(3,\"x\",-1,\"aa:bb:cc:dd:ee:ff\",1)\r\nOK\r\n",
                       NULL, MAX_AP) == 0, "NULL 输出安全返回 0");
+
+    printf("== test 7: AT 响应收尾判定（连续到达的响应也要能判完） ==\n");
+    check(AT_DONE("OK\r\n") == 1, "单独 OK 行判完");
+    check(AT_DONE("AT\r\n\r\nOK\r\n") == 1, "回显 + OK 判完");
+    check(AT_DONE("+CWLAP:(3,\"a\",-1,\"aa:bb:cc:dd:ee:ff\",1)\r\nOK\r\n") == 1,
+          "CWLAP 响应以 OK 结尾判完");
+    check(AT_DONE("ERROR\r\n") == 1, "ERROR 判完");
+    check(AT_DONE("FAIL\r\n") == 1, "FAIL 判完");
+    check(AT_DONE("+CWLAP:(3,\"a\",-1,\"aa:bb:cc:dd:ee:ff\",1)\r\n") == 0,
+          "只收到 AP 行未判完");
+    check(AT_DONE("OK") == 0, "无换行未判完");
+    check(AT_DONE("+CWLAP:(0,\"NOT OK\",-1,\"aa:bb:cc:dd:ee:ff\",1)\r\n") == 0,
+          "SSID 含 OK 字样不误判");
+    check(AT_DONE("XOK\r\n") == 0, "OK 不是独立成行不误判");
+    check(at_response_complete(NULL, 0) == 0, "NULL 安全返回 0");
 
     printf("\n结果: %s（%d 项失败）\n",
            failures == 0 ? "全部通过" : "存在失败", failures);

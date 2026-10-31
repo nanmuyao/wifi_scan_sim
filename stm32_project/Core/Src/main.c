@@ -4,9 +4,12 @@
  * 说明：
  *   1. 使用 ap_parser.c/h 解析 CWLAP（纯 C，无 HAL 依赖），与本仓库 PC 仿真
  *      验证的是同一份解析逻辑；
- *   2. 修正两处历史隐患：
- *      a) 逐字节中断接收使用 static 局部变量 byte，不再覆写 wifi_buf[0]；
- *      b) 判帧结束时在缓冲末尾显式补 '\0'，避免 strtok 越界/脏读。
+ *   2. 修正历史隐患：
+ *      a) 逐字节接收缓冲 rx_byte 为文件级变量，main 启动与回调重挂共用一个，
+ *         不再覆写 wifi_buf[0]，也不会丢首字节；
+ *      b) 每收一字节在缓冲末尾显式补 '\0'，避免 strtok 越界/脏读；
+ *      c) 判帧结束改为看终止行（OK/ERROR/FAIL，at_response_complete），
+ *         不再依赖"换行前有 20ms 空闲"——连续到达的响应永远满足不了该条件。
  *
  * 接线：
  *   ESP8266 TX  -> PA10 (USART1_RX)
@@ -30,29 +33,31 @@
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
+#ifndef MAX_AP_T
+#define MAX_AP_T 16           /* 单次扫描最多保存的 AP 数 */
+#endif
+
 /* ---------- ESP8266 串口接收（中断逐字节） ---------- */
 #define WIFI_BUF_MAX  4096
 uint8_t  wifi_buf[WIFI_BUF_MAX];
 volatile uint16_t wifi_len = 0;
 volatile uint8_t  wifi_done = 0;
+static uint8_t rx_byte;       /* 逐字节接收缓冲：main 启动与回调重挂用同一个变量 */
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    static uint8_t byte;          /* 修正点 a：逐字节缓冲与 wifi_buf 分离 */
-    static uint32_t last_tick = 0;
-
     if (huart->Instance == USART1) {
         if (wifi_len < WIFI_BUF_MAX - 1) {
-            wifi_buf[wifi_len++] = byte;
-            wifi_buf[wifi_len] = '\0';   /* 修正点 b：实时保持 NUL 结尾 */
+            wifi_buf[wifi_len++] = rx_byte;
+            wifi_buf[wifi_len] = '\0';   /* 实时保持 NUL 结尾 */
 
-            /* 判尾：收到换行且 20ms 无新数据视为一帧结束 */
-            if (byte == '\n' && (HAL_GetTick() - last_tick) > 20) {
+            /* 判尾：收到换行，且缓冲末尾是独立成行的 OK / ERROR / FAIL */
+            if (rx_byte == '\n' &&
+                at_response_complete((const char *)wifi_buf, wifi_len)) {
                 wifi_done = 1;
             }
-            last_tick = HAL_GetTick();
         }
-        HAL_UART_Receive_IT(&huart1, &byte, 1);
+        HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
     }
 }
 
@@ -73,9 +78,7 @@ int esp_wait(const char *cmd, const char *expect, uint32_t timeout_ms)
     while (HAL_GetTick() - start < timeout_ms) {
         if (wifi_done) {
             wifi_done = 0;
-            if (strstr((char *)wifi_buf, expect)) {
-                return 1;
-            }
+            return strstr((char *)wifi_buf, expect) ? 1 : 0;
         }
     }
     return 0;
@@ -105,8 +108,7 @@ int main(void)
     MX_USART1_UART_Init();    /* 115200, ESP8266 */
     MX_USART2_UART_Init();    /* 115200, 调试输出 */
 
-    static uint8_t byte;      /* 首次启动中断接收 */
-    HAL_UART_Receive_IT(&huart1, &byte, 1);
+    HAL_UART_Receive_IT(&huart1, &rx_byte, 1);   /* 首次启动中断接收 */
 
     /* 1. 基础握手 */
     while (!esp_wait("AT\r\n", "OK", 2000)) {

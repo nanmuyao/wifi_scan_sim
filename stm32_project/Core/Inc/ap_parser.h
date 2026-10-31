@@ -17,6 +17,9 @@ typedef struct {
 /* 解析整段 CWLAP 响应，返回解析到的 AP 数量 */
 int parse_cwlap(const char *buf, ap_info_t *aps, int max_aps);
 
+/* 判断 AT 响应是否收完：以单独一行的 OK / ERROR / FAIL 结尾（且已收到换行）返回 1 */
+int at_response_complete(const char *buf, int len);
+
 /* 格式化打印一个 AP */
 void ap_print(const ap_info_t *ap);
 
