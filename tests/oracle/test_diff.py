@@ -51,7 +51,9 @@ check(diff.compare(o, u)[0]["seq"]["diff"] == 1, "浮点值差得多就是不一
 print("== 端到端：仓库自带的抓包，tshark 与我们逐帧一致 ==")
 check(diff.tshark_version().startswith(diff.TSHARK_MAJOR_MINOR), "tshark 是 %s.x（实际 %s）" % (diff.TSHARK_MAJOR_MINOR, diff.tshark_version()))
 # 已知缺口：Action 帧体里的元素我们还没解析（Action 帧各类别，阶段 B 之后）
-for rel, gaps in (("tests/fixtures/wpa2_handshake.pcap", {}), ("wifi_demo_parse.pcap", {"tags": (0, 1)}), ("demo.pcap", {"tags": (0, 1)})):
+for rel, gaps in (("tests/fixtures/wpa2_handshake.pcap", {}), ("wifi_demo_parse.pcap", {"tags": (0, 1)}), ("demo.pcap", {"tags": (0, 1), "rsn_caps": (0, 3), "rsn_mfpr": (0, 3), "rsn_mfpc": (0, 3)})):
+    # demo.pcap 的 RSN 元素是 scapy 生成的畸形元素（AKM 计数 1 而只剩 3 字节）。版本、组密码、成对套件两边一致；
+    # tshark 报畸形后还继续读出了能力字段（0），我们停在出错的 AKM 列表，不照抄 Wireshark 的这种恢复方式
     r = diff.diff_file(os.path.join(ROOT, rel))
     bad = sum(v["diff"] + v["missing"] for f_, v in r["stats"].items() if f_ not in gaps) if r["stats"] else -1
     got_gaps = {f_: (v["diff"], v["missing"]) for f_, v in r["stats"].items() if f_ in gaps} if r["stats"] else {}

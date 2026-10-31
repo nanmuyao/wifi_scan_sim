@@ -71,12 +71,26 @@ FIELDS = [
     ("erp_present", "wlan.erp_info.erp_present"),
     ("erp_protection", "wlan.erp_info.use_protection"),
     ("erp_barker", "wlan.erp_info.barker_preamble_mode"),
+    ("rsn_version", "wlan.rsn.version"),
+    ("rsn_gcs", "wlan.rsn.gcs.type"),
+    ("rsn_gcs_oui", "wlan.rsn.gcs.oui"),
+    ("rsn_caps", "wlan.rsn.capabilities"),
+    ("rsn_mfpr", "wlan.rsn.capabilities.mfpr"),
+    ("rsn_mfpc", "wlan.rsn.capabilities.mfpc"),
+    ("rsn_pmkid_count", "wlan.rsn.pmkid.count"),
+    ("rsn_gmcs", "wlan.rsn.gmcs.type"),
 ]
+# 元素内容字段只对管理帧比较：数据帧里 EAPOL-Key 的 Key Data 也带元素，那个缺口已经在「tags」一行单独登记（阶段 D）
+CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multicast", "tim_offset", "tim_bitmap", "country",
+                  "country_env", "erp", "erp_present", "erp_protection", "erp_barker", "rsn_version", "rsn_gcs",
+                  "rsn_gcs_oui", "rsn_caps", "rsn_mfpr", "rsn_mfpc", "rsn_pmkid_count", "rsn_gmcs",
+                  "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
 # 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
 TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number"),
                 ("rates", "wlan.supported_rates"), ("ext_rates", "wlan.extended_supported_rates"),
                 ("country_fcn", "wlan.country_info.fnm.fcn"), ("country_nc", "wlan.country_info.fnm.nc"),
-                ("country_mtpl", "wlan.country_info.fnm.mtpl")]
+                ("country_mtpl", "wlan.country_info.fnm.mtpl"),
+                ("rsn_pcs", "wlan.rsn.pcs.type"), ("rsn_akm", "wlan.rsn.akms.type")]
 TSHARK_MAJOR_MINOR = "4.4"
 
 
@@ -93,9 +107,9 @@ def _norm(name, v):
         return int(v, 16)
     if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
-                "dtim_period", "country_env"):
+                "dtim_period", "country_env", "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs"):
         return int(v)
-    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp"):
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui"):
         return int(v, 0)
     if name in ("ssid", "tim_bitmap"):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
@@ -106,7 +120,7 @@ def _norm(name, v):
     if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
         return {"1": True, "0": False}.get(v)
     if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu",
-                "tim_multicast", "erp_present", "erp_protection", "erp_barker"):
+                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc"):
         return v == "True"
     return v
 
@@ -136,6 +150,9 @@ def tshark_frames(path):
         p2 = (lines2[i].split("\t") if i < len(lines2) else []) + [""] * len(TSHARK_EXTRA)
         for j, (name, _) in enumerate(TSHARK_EXTRA):
             fr[name] = [int(x, 0) for x in p2[j].split(",") if x]
+        if (fr["type_subtype"] or 0) >> 4 != 0 or fr["type_subtype"] is None:
+            for name in CONTENT_FIELDS:
+                fr[name] = None if name in fr and not isinstance(fr[name], list) else []
         frames.append(fr)
     return frames
 
@@ -147,6 +164,18 @@ def _ie(rec, name, key):
         return None
     e = d.get(name)
     return None if e is None else e[key]
+
+
+def _suite_part(rec, key, i):
+    """RSN 元素里某个套件的 OUI(i=0) 或类型(i=1)；没有时 None。"""
+    s = _ie(rec, "rsn", key)
+    return None if s is None else s[i]
+
+
+def _suite_list(rec, key):
+    """RSN 元素里成对密码 / AKM 套件列表的类型；没有时 None。"""
+    s = _ie(rec, "rsn", key)
+    return None if s is None else [t for _, t in s]
 
 
 def _triplets(rec, key):
@@ -209,6 +238,16 @@ def ours_frames(path):
             "erp_present": _ie(r, "erp", "non_erp_present"),
             "erp_protection": _ie(r, "erp", "use_protection"),
             "erp_barker": _ie(r, "erp", "barker_preamble"),
+            "rsn_version": _ie(r, "rsn", "version"),
+            "rsn_gcs": _suite_part(r, "group", 1),
+            "rsn_gcs_oui": _suite_part(r, "group", 0),
+            "rsn_caps": _ie(r, "rsn", "caps"),
+            "rsn_mfpr": _ie(r, "rsn", "mfpr"),
+            "rsn_mfpc": _ie(r, "rsn", "mfpc"),
+            "rsn_pmkid_count": None if _ie(r, "rsn", "pmkids") is None else len(_ie(r, "rsn", "pmkids")),
+            "rsn_gmcs": _suite_part(r, "group_mgmt", 1),
+            "rsn_pcs": _suite_list(r, "pairwise"),
+            "rsn_akm": _suite_list(r, "akm"),
             "rt_length": rt.get("length"),
             "mactime": rt.get("tsft"),
             "rt_flags": rt.get("flags"),

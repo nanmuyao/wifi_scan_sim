@@ -70,7 +70,23 @@ def cases():
     out.append(("Beacon country: negative max power", mgmt(8, 12, ie(0, b"c") + ie(7, b"JP\x20" + bytes([1, 13, 0xf6])))))
     for v in (0x00, 0x01, 0x02, 0x04, 0x07):
         out.append(("Beacon ERP 0x%02x" % v, mgmt(8, 12, ie(0, b"e") + ie(42, bytes([v])))))
-    out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=114))))
+    # RSN：各种套件组合，以及元素在不同位置结束
+    def s(t, oui=b"\x00\x0f\xac"):
+        return oui + bytes([t])
+    le = lambda n: bytes([n & 255, n >> 8])        # noqa: E731
+    rsn_wpa2 = le(1) + s(4) + le(1) + s(4) + le(1) + s(2) + le(0x000c)
+    out.append(("Beacon RSN WPA2-PSK CCMP", mgmt(8, 12, ie(0, b"r") + ie(48, rsn_wpa2))))
+    out.append(("Beacon RSN WPA3-SAE PMF required", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(8) + le(0x00c0) + le(0) + s(6)))))
+    out.append(("Assoc Request RSN with PMKID", mgmt(0, 4, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(8) + le(0x00c0) + le(1) + bytes(range(16)) + s(6)))))
+    out.append(("Beacon RSN TKIP + CCMP pairwise, PSK + PSK-SHA256", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(2) + le(2) + s(2) + s(4) + le(2) + s(2) + s(6) + le(0x0000)))))
+    out.append(("Beacon RSN Suite-B 192 (GCMP-256, BIP-GMAC-256)", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(9) + le(1) + s(9) + le(1) + s(12) + le(0x00cc) + le(0) + s(12)))))
+    out.append(("Beacon RSN OWE + extended key id", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(18) + le(0x200c)))))
+    out.append(("Beacon RSN FT-PSK", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(4) + le(0x000c)))))
+    out.append(("Beacon RSN vendor OUI group cipher", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(2, oui=b"\x00\x50\xf2") + le(1) + s(2, oui=b"\x00\x50\xf2") + le(1) + s(2, oui=b"\x00\x50\xf2")))))
+    out.append(("Beacon RSN version and group cipher only", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4)))))
+    out.append(("Beacon RSN ends after AKM list", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(2)))))
+    out.append(("Beacon RSN ends after capabilities", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(2) + le(0x0080)))))
+    out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))
     for tods, fromds in ((0, 0), (0, 1), (1, 0), (1, 1)):

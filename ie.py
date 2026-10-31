@@ -101,6 +101,63 @@ def decode_erp(d):
     return {"value": b, "non_erp_present": bool(b & 1), "use_protection": bool(b & 2), "barker_preamble": bool(b & 4)}
 
 
+def _suite(b):
+    """4 字节套件选择器：3 字节 OUI（0x000fac = IEEE 802.11）+ 1 字节类型。返回 (oui, 类型)。"""
+    return (b[0] << 16 | b[1] << 8 | b[2], b[3])
+
+
+# RSN 能力位（16 位小端）
+RSN_CAPS = {"preauth": 0, "no_pairwise": 1, "mfpr": 6, "mfpc": 7, "joint_multi_band": 8, "peerkey": 9,
+            "ocvc": 12, "extended_key_id": 13}
+
+
+def decode_rsn(d):
+    """RSN 元素（48）：版本、组密码套件、成对密码套件列表、AKM（认证与密钥管理）套件列表、能力、PMKID 列表、
+    组管理密码套件。版本之后的字段都是可选的，元素可以在任何一处结束，缺的字段是 None。
+    计数超出剩余长度（元素被截断或损坏）时，保留已经读到的字段，"malformed" 置 True，
+    出问题的那个列表及之后的字段是 None（tshark 也是这样：报畸形，但已读到的字段照常给出）。
+    不足版本号 2 字节时返回 None。"""
+    n = len(d)
+    if n < 2:
+        return None
+    out = {"version": d[0] | d[1] << 8, "group": None, "pairwise": None, "akm": None,
+           "caps": None, "pmkids": None, "group_mgmt": None, "ptksa_replay": None, "gtksa_replay": None,
+           "malformed": False}
+    out.update({k: None for k in RSN_CAPS})          # 没有能力字段时这些位也是 None，键总是齐的
+    p = 2
+    if n - p >= 4:
+        out["group"] = _suite(d[p:p + 4])
+        p += 4
+        for key in ("pairwise", "akm"):
+            if n - p < 2:
+                return out
+            cnt = d[p] | d[p + 1] << 8
+            p += 2
+            if p + 4 * cnt > n:
+                out["malformed"] = True
+                return out
+            out[key] = [_suite(d[p + 4 * i:p + 4 * i + 4]) for i in range(cnt)]
+            p += 4 * cnt
+        if n - p >= 2:
+            caps = d[p] | d[p + 1] << 8
+            out["caps"] = caps
+            out.update({k: bool(caps >> bit & 1) for k, bit in RSN_CAPS.items()})
+            out["ptksa_replay"] = caps >> 2 & 3
+            out["gtksa_replay"] = caps >> 4 & 3
+            p += 2
+            if n - p >= 2:
+                cnt = d[p] | d[p + 1] << 8
+                p += 2
+                if p + 16 * cnt > n:
+                    out["malformed"] = True
+                    return out
+                out["pmkids"] = [bytes(d[p + 16 * i:p + 16 * i + 16]) for i in range(cnt)]
+                p += 16 * cnt
+                if n - p >= 4:
+                    out["group_mgmt"] = _suite(d[p:p + 4])
+    return out
+
+
 # 元素 ID -> (名字, 解码函数)
 DECODERS = {
     0: ("ssid", decode_ssid),
@@ -109,6 +166,7 @@ DECODERS = {
     5: ("tim", decode_tim),
     7: ("country", decode_country),
     42: ("erp", decode_erp),
+    48: ("rsn", decode_rsn),
     50: ("ext_rates", decode_rates),
 }
 

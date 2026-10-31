@@ -25,6 +25,8 @@ KNOWN_GAPS = {
     # 同样是那几帧 Multi-Link：嵌套的子元素里还有速率元素，tshark 把它们的速率并进同一个列表
     "rates": (2, 0),
     "ext_rates": (2, 0),
+    # 6 帧 SAE 认证里的扩展元素 114（AKM Suite Selector），tshark 也按 RSN 的 AKM 列出来（阶段 E）
+    "rsn_akm": (0, 6),
 }
 failures = []
 

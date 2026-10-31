@@ -71,7 +71,16 @@
 唯一的差异是前面那几帧 Multi-Link 嵌套（速率各 2 帧，已登记）。合成帧（隐藏 SSID、32 字节非 UTF-8 SSID、基本速率位、
 TIM 偏移与位图、国家的运行类别三元组与填充、负的最大功率、ERP 各位）全部一致。
 合成帧立刻抓出一个我写错的地方：TIM 位图偏移是 bits 1-7 的数值（右移 1 位），我只做了掩码；样例里的偏移全是 0，看不出来。
-下一步：HT 能力 / 操作（45 / 61）、RSN（48）、扩展能力（127）、厂商元素（221），再到 FT / RSNXE，最后是扩展元素 HE / EHT / Multi-Link。
+### RSN 元素（C2b）
+`ie.decode_rsn`：版本、组密码套件、成对密码套件列表、AKM 套件列表、能力（每一位：预认证、MFPR、MFPC、OCVC、扩展 Key ID 等）、
+PMKID 列表、组管理密码套件。套件表示成 (OUI, 类型)，OUI 为 0x000fac 的是 IEEE 802.11 自己的套件。版本之后的字段都可选，元素可以在任何一处结束。
+和 tshark 在 24 个样例上对照：版本、组密码、成对套件、能力、MFPR / MFPC 3929 帧一致，AKM 3929 帧一致，PMKID 计数 24、组管理套件 11。
+唯一缺的是 6 帧 SAE 认证里的扩展元素 114（AKM Suite Selector，tshark 也按 AKM 列出），归阶段 E。
+11 种合成 RSN（WPA2、WPA3 + PMF 必需、带 PMKID、TKIP + CCMP 混合、Suite-B 192、OWE、FT-PSK、厂商 OUI、各处截断）全部一致。
+合成帧还抓出一个我的缺陷：RSN 在能力字段之前结束时，结果里缺少 mfpr 等键，调用方会 KeyError；现在键总是齐的，缺的是 None。
+`demo.pcap` 里 scapy 生成的 RSN 元素本身是畸形的（AKM 计数 1 而只剩 3 字节）：tshark 报畸形但仍给出已读到的字段，我们同样保留已读到的部分
+（并带 `malformed` 标记）；tshark 之后还继续读出了能力字段，我们不照抄，登记为 `demo.pcap` 的已知差异。
+下一步：HT 能力 / 操作（45 / 61）、扩展能力（127）、厂商元素（221），再到 FT / RSNXE，最后是扩展元素 HE / EHT / Multi-Link。
 还没对照的帧层内容：A-MSDU 内部结构、Action 帧各类别。
 
 ## 2. 验证方法（贯穿所有阶段）
