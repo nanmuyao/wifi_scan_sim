@@ -321,6 +321,69 @@ def decode_rsnxe(d):
 
 
 # ---------------------------------------------------------------------------
+# HE（802.11ax，Wi-Fi 6）扩展元素：能力 35、操作 36。
+# 这里解码原始值、MCS / NSS 表和操作元素的主要字段；MAC 能力（48 位）和 PHY 能力（88 位）里的单个位没有逐个命名。
+# ---------------------------------------------------------------------------
+EXT_HE_CAP, EXT_HE_OP = 35, 36
+HE_MAC_LEN, HE_PHY_LEN = 6, 11
+# PHY 能力第 0 字节的信道宽度集：bit1 2.4G 40MHz、bit2 5G 40/80MHz、bit3 5G 160MHz、bit4 5G 160/80+80MHz、bit5/6 242 音 RU
+HE_PHY0_160, HE_PHY0_80P80 = 0x08, 0x10
+
+
+def he_mcs_map(v):
+    """HE-MCS 与 NSS 表（16 位）：每个空间流数（1-8）2 位。0 = MCS 0-7，1 = MCS 0-9，2 = MCS 0-11，3 = 不支持。"""
+    return [v >> (2 * i) & 3 for i in range(8)]
+
+
+def decode_he_cap(d):
+    """HE 能力（扩展元素 35，数据在扩展 ID 之后）：MAC 能力 6 字节（小端的 48 位整数）+ PHY 能力 11 字节
+    + 接收 / 发送 HE-MCS 表（80MHz 及以下，各 2 字节）；PHY 能力第 0 字节置位 160MHz 位时再跟 160MHz 的一对表，
+    置位 160/80+80MHz 位时再跟 80+80MHz 的一对表（各 4 字节）；其余是 PPE 门限（原样放在 "ppe" 里，不解）。
+    不足 21 字节返回 None。"""
+    if len(d) < HE_MAC_LEN + HE_PHY_LEN + 4:
+        return None
+    out = {"mac_caps": int.from_bytes(d[:6], "little"), "phy_caps": bytes(d[6:17]), "phy0": d[6]}
+    p = 17
+    out["rx_lte80"], out["tx_lte80"] = d[p] | d[p + 1] << 8, d[p + 2] | d[p + 3] << 8
+    p += 4
+    out["rx_160"] = out["tx_160"] = out["rx_80p80"] = out["tx_80p80"] = None
+    for key, bit in (("160", HE_PHY0_160), ("80p80", HE_PHY0_80P80)):
+        if d[6] & bit and p + 4 <= len(d):
+            out["rx_" + key], out["tx_" + key] = d[p] | d[p + 1] << 8, d[p + 2] | d[p + 3] << 8
+            p += 4
+    out["ppe"] = bytes(d[p:])
+    return out
+
+
+def decode_he_op(d):
+    """HE 操作（扩展元素 36）：参数 3 字节（小端 24 位：bit0-2 默认 PE 时长，bit3 要求 TWT，bit4-13 TXOP 时长 RTS 门限，
+    bit14 有 VHT 操作信息，bit15 共址 BSS，bit16 ER SU 禁用，bit17 有 6GHz 操作信息）+ BSS 颜色信息 1 字节
+    （bit0-5 颜色，bit6 部分颜色，bit7 颜色禁用）+ 基本 HE-MCS 与 NSS 表 2 字节；之后按参数位依次可选：
+    VHT 操作信息 3 字节、最大共址 BSSID 指示 1 字节、6GHz 操作信息 5 字节。不足 6 字节返回 None。
+    BSS 颜色字段没有 tshark 字段可对照，按标准解码。"""
+    if len(d) < 6:
+        return None
+    params = d[0] | d[1] << 8 | d[2] << 16
+    out = {"params": params, "default_pe_duration": params & 7, "twt_required": bool(params >> 3 & 1),
+           "txop_rts_threshold": params >> 4 & 0x3FF, "vht_op_present": bool(params >> 14 & 1),
+           "co_hosted_bss": bool(params >> 15 & 1), "er_su_disable": bool(params >> 16 & 1),
+           "six_ghz_present": bool(params >> 17 & 1),
+           "bss_color_info": d[3], "bss_color": d[3] & 0x3F, "partial_bss_color": bool(d[3] >> 6 & 1),
+           "bss_color_disabled": bool(d[3] >> 7 & 1), "basic_mcs_nss": d[4] | d[5] << 8,
+           "vht_op": None, "max_cohosted_bssid": None, "six_ghz": None}
+    p = 6
+    if out["vht_op_present"] and p + 3 <= len(d):
+        out["vht_op"] = {"channel_width": d[p], "seg0": d[p + 1], "seg1": d[p + 2]}
+        p += 3
+    if out["co_hosted_bss"] and p + 1 <= len(d):
+        out["max_cohosted_bssid"] = d[p]
+        p += 1
+    if out["six_ghz_present"] and p + 5 <= len(d):
+        out["six_ghz"] = {"primary_channel": d[p], "control": d[p + 1], "seg0": d[p + 2], "seg1": d[p + 3], "min_rate": d[p + 4]}
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 厂商专用元素（221）：3 字节 OUI + 1 字节厂商自定义类型 + 数据。
 # OUI 0x0050f2（Microsoft / Wi-Fi 联盟早期）：类型 1 = WPA（WPA1），2 = WMM，4 = WPS。
 # ---------------------------------------------------------------------------
@@ -414,9 +477,18 @@ DECODERS = {
 }
 
 
+EXT_DECODERS = {EXT_HE_CAP: ("he_cap", decode_he_cap), EXT_HE_OP: ("he_op", decode_he_op)}
+
+
 def decode_all(els):
     """{名字: 解码结果}，每种元素只取第一次出现的；数据不合规的元素不出现在结果里。"""
     out = {}
+    for e in els:
+        spec = EXT_DECODERS.get(e.ext)          # 普通元素的 ext 是 None，查不到
+        if spec and spec[0] not in out:
+            r = spec[1](e.data)
+            if r is not None:
+                out[spec[0]] = r
     for e in els:
         spec = DECODERS.get(e.id)            # 扩展元素的 ID 是 255，不在这张表里
         if spec and spec[0] not in out:

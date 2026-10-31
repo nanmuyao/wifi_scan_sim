@@ -327,6 +327,73 @@ check(ie.flatten(ie.walk(b"\x00\x01a\x30\x00")[0], 2) == ie.walk(b"\x00\x01a\x30
 check(ie.flatten(ie.walk(bytes([255, 3, 107, 0, 0]))[0], 2)[0].ext == 107 and len(ie.flatten(ie.walk(bytes([255, 3, 107, 0, 0]))[0], 2)) == 1, "Multi-Link 太短（None）：只留它自己")
 check(ie.ML_PROFILE_FIXED == {0: 2, 1: 4, 2: 2, 3: 4, 5: 2, 8: 2}, "固定字段长度表（已由 tshark 对照合成帧确认）")
 
+print("== HE（802.11ax）能力 / 操作 ==")
+check(ie.he_mcs_map(0xfffa) == [2, 2, 3, 3, 3, 3, 3, 3], "HE-MCS 表 0xfffa：NSS1、NSS2 支持 MCS 0-11，其余不支持（样例里的真实值）")
+check(ie.he_mcs_map(0x001b) == [3, 2, 1, 0, 0, 0, 0, 0] and ie.he_mcs_map(0xaaaa) == [2] * 8 and ie.he_mcs_map(0) == [0] * 8, "每个空间流 2 位，NSS1 在最低位")
+
+
+def hecap(mac=b"\x01\x78\xc8\x12\x40\x00", phy0=0x02, maps=((0xfffa, 0xfffa),), tail=b""):
+    body = mac + bytes([phy0]) + bytes(range(1, 11))
+    for rx, tx in maps:
+        body += struct.pack("<HH", rx, tx)
+    return body + tail
+
+
+h = ie.decode_he_cap(hecap())
+check(h["mac_caps"] == 0x0000004012c87801 and h["phy0"] == 0x02 and len(h["phy_caps"]) == 11, "MAC 能力 6 字节按小端 -> 0x4012c87801（样例里的真实值）；PHY 能力 11 字节")
+check((h["rx_lte80"], h["tx_lte80"], h["rx_160"], h["tx_160"], h["rx_80p80"], h["tx_80p80"], h["ppe"]) == (0xfffa, 0xfffa, None, None, None, None, b""),
+      "没有 160 / 80+80 位：只有 80MHz 及以下的一对表")
+h = ie.decode_he_cap(hecap(phy0=0x08, maps=((0xfffa, 0xfffb), (0xfffe, 0xfffc))))
+check((h["rx_lte80"], h["tx_lte80"], h["rx_160"], h["tx_160"], h["rx_80p80"]) == (0xfffa, 0xfffb, 0xfffe, 0xfffc, None), "PHY 第 0 字节的 0x08：多一对 160MHz 表（接收在前）")
+h = ie.decode_he_cap(hecap(phy0=0x10, maps=((0xfffa, 0xfffa), (0xfff0, 0xffc0))))
+check((h["rx_160"], h["rx_80p80"], h["tx_80p80"]) == (None, 0xfff0, 0xffc0), "0x10：多一对 80+80MHz 表，160 没有")
+h = ie.decode_he_cap(hecap(phy0=0x18, maps=((0xfffa, 0xfffa), (0xfffe, 0xfffc), (0xfff0, 0xffc0))))
+check((h["rx_160"], h["tx_160"], h["rx_80p80"], h["tx_80p80"]) == (0xfffe, 0xfffc, 0xfff0, 0xffc0), "两位都置：先 160 后 80+80")
+h = ie.decode_he_cap(hecap(phy0=0x60, maps=((1, 2),)))
+check(h["rx_160"] is None and h["rx_80p80"] is None, "0x60（242 音 RU 位）不引出额外的表")
+h = ie.decode_he_cap(hecap(phy0=0x08, maps=((0xfffa, 0xfffa),)))
+check(h["rx_160"] is None and h["tx_160"] is None, "声明有 160MHz 表但数据不够：读不出来（None），不越界")
+h = ie.decode_he_cap(hecap(tail=b"\xde\xad"))
+check(h["ppe"] == b"\xde\xad", "其余字节放进 ppe（PPE 门限，不解）")
+h = ie.decode_he_cap(hecap(phy0=0x08, maps=((1, 2), (3, 4)), tail=b"\x99"))
+check(h["ppe"] == b"\x99", "有 160 表时 ppe 从 160 表之后算起")
+check(len(hecap()) == 21 and ie.decode_he_cap(hecap()[:20]) is None and ie.decode_he_cap(hecap()) is not None, "最少 21 字节（6 + 11 + 4）；少 1 字节：None")
+check(ie.decode_he_cap(hecap(mac=b"\xff" * 6))["mac_caps"] == 0xFFFFFFFFFFFF, "MAC 能力满 48 位")
+
+
+def heop(params=0, color=0, basic=0xfffc, extra=b""):
+    return bytes([params & 255, params >> 8 & 255, params >> 16 & 255, color]) + struct.pack("<H", basic) + extra
+
+
+o = ie.decode_he_op(heop())
+check((o["params"], o["default_pe_duration"], o["twt_required"], o["vht_op"], o["max_cohosted_bssid"], o["six_ghz"], o["basic_mcs_nss"]) == (0, 0, False, None, None, None, 0xfffc),
+      "全 0 参数：没有可选部分")
+check(ie.decode_he_op(heop(params=0x05))["default_pe_duration"] == 5 and not ie.decode_he_op(heop(params=0x05))["twt_required"], "bit0-2 默认 PE 时长")
+check(ie.decode_he_op(heop(params=0x08))["twt_required"] and ie.decode_he_op(heop(params=0x08))["default_pe_duration"] == 0, "bit3 要求 TWT")
+check(ie.decode_he_op(heop(params=0x003ff0))["txop_rts_threshold"] == 0x3ff and not ie.decode_he_op(heop(params=0x003ff0))["twt_required"], "bit4-13 TXOP 时长 RTS 门限（10 位）")
+for name, bit in (("vht_op_present", 14), ("co_hosted_bss", 15), ("er_su_disable", 16), ("six_ghz_present", 17)):
+    r = ie.decode_he_op(heop(params=1 << bit))
+    others = [k for k in ("vht_op_present", "co_hosted_bss", "er_su_disable", "six_ghz_present") if k != name and r[k]]
+    check(r[name] is True and not others, "参数 bit%d 只置 %s" % (bit, name))
+o = ie.decode_he_op(heop(color=0xea))
+check((o["bss_color"], o["partial_bss_color"], o["bss_color_disabled"], o["bss_color_info"]) == (0x2a, True, True, 0xea), "BSS 颜色信息 0xea：颜色 42、部分颜色、已禁用")
+o = ie.decode_he_op(heop(color=0x40))
+check(o["partial_bss_color"] and not o["bss_color_disabled"] and o["bss_color"] == 0, "bit6 只是部分颜色")
+o = ie.decode_he_op(heop(color=0x80))
+check(o["bss_color_disabled"] and not o["partial_bss_color"] and o["bss_color"] == 0, "bit7 只是颜色禁用")
+o = ie.decode_he_op(heop(params=0x00c000 | 0x020000, extra=b"\x02\x2a\x00" + b"\x03" + b"\x25\x82\x27\x00\x00"))
+check(o["vht_op"] == {"channel_width": 2, "seg0": 0x2a, "seg1": 0} and o["max_cohosted_bssid"] == 3
+      and o["six_ghz"] == {"primary_channel": 0x25, "control": 0x82, "seg0": 0x27, "seg1": 0, "min_rate": 0}, "三个可选部分按 VHT、共址、6GHz 的顺序")
+o = ie.decode_he_op(heop(params=0x020000, extra=b"\x25\x82\x27\x00\x00"))
+check(o["vht_op"] is None and o["max_cohosted_bssid"] is None and o["six_ghz"]["primary_channel"] == 0x25, "只有 6GHz：前两个可选部分不占字节")
+o = ie.decode_he_op(heop(params=0x00c000 | 0x020000, extra=b"\x02\x2a\x00\x03\x25"))
+check(o["vht_op"] is not None and o["max_cohosted_bssid"] == 3 and o["six_ghz"] is None, "6GHz 部分不够 5 字节：读不出来（None），前面的保留")
+check(len(heop()) == 6 and ie.decode_he_op(heop()[:5]) is None and ie.decode_he_op(heop()) is not None, "最少 6 字节（3 + 1 + 2）；少 1 字节：None")
+
+els, _ = ie.walk(bytes([255, 1 + len(hecap()), 35]) + hecap() + bytes([255, 7, 36]) + heop() + bytes([255, 1 + len(hecap(phy0=0x04)), 35]) + hecap(phy0=0x04))
+d = ie.decode_all(els)
+check(d["he_cap"]["phy0"] == 0x02 and d["he_op"]["basic_mcs_nss"] == 0xfffc, "decode_all：扩展元素按扩展 ID 解码，同种取第一个（0x02 而不是后面的 0x04）")
+
 print("== decode_all ==")
 els, _ = ie.walk(b"\x00\x01a\x00\x01b\x03\x01\x06\x05\x01\x00\xff\x02\x23\x00")
 d = ie.decode_all(els)

@@ -159,6 +159,31 @@ def cases():
     out.append(("Beacon Multi-Link, no per-STA profile", mgmt(8, 12, ie(0, b"ml") + MAIN + ml_basic([], b""))))
     out.append(("Beacon Multi-Link, STA without MAC address", mgmt(8, 12, ie(0, b"ml") + MAIN + ml_basic([(3, None, ie(1, b"\x8c"))], b"\x11\x04"))))
     out.append(("Beacon Multi-Link, link ID in common info, elements before and after", mgmt(8, 12, ie(0, b"ml") + MAIN + ie(3, b"\x06") + ml_basic([(1, mac1, ie(1, b"\x82"))], b"\x11\x04", link_id=5) + ie(7, b"US \x01\x0b\x14"))))
+    # HE（802.11ax）能力 / 操作
+    def hecap(phy0=0x02, mac=bytes([1, 0x78, 0xc8, 0x12, 0x40, 0]), maps=((0xfffa, 0xfffa),)):
+        body = mac + bytes([phy0]) + bytes(range(1, 11))
+        for rx, tx in maps:
+            body += struct.pack("<HH", rx, tx)
+        return ie(0, body, ext=35)
+
+    for name, phy0, maps in (("40MHz in 2.4GHz", 0x02, ((0xfffa, 0xfffa),)), ("40/80MHz in 5GHz", 0x04, ((0xfffa, 0xfffa),)),
+                             ("160MHz in 5GHz: extra 160 map", 0x08, ((0xfffa, 0xfffa), (0xfffe, 0xfffc))),
+                             ("160/80+80MHz in 5GHz", 0x10, ((0xfffa, 0xfffa), (0xfffe, 0xfffc))),
+                             ("160 and 160/80+80: both extra maps", 0x18, ((0xfffa, 0xfffa), (0xfffe, 0xfffc), (0xfff0, 0xffc0))),
+                             ("242 tone RU bits only", 0x60, ((0xaaaa, 0x5555),))):
+        out.append(("Beacon HE capabilities, %s" % name, mgmt(8, 12, ie(0, b"he") + hecap(phy0, maps=maps))))
+    out.append(("Beacon HE capabilities, other MAC capability bits", mgmt(8, 12, ie(0, b"he") + hecap(mac=bytes([0xff, 0x00, 0xa5, 0x5a, 0x01, 0x80])))))
+
+    def heop(params=0, color=0x2a, basic=0xfffc, extra=b""):
+        return ie(0, bytes([params & 255, params >> 8 & 255, params >> 16]) + bytes([color]) + struct.pack("<H", basic) + extra, ext=36)
+
+    for name, kw in (("defaults", {}), ("default PE 5, TWT required", dict(params=0x00000d)), ("RTS threshold 0x3ff", dict(params=0x003ff0)),
+                     ("ER SU disable", dict(params=0x010000)), ("VHT operation info", dict(params=0x004000, extra=b"\x01\x2a\x00")),
+                     ("co-hosted BSS", dict(params=0x008000, extra=b"\x04")),
+                     ("6GHz operation info", dict(params=0x020000, extra=b"\x25\x82\x27\x00\x00")),
+                     ("VHT + co-hosted + 6GHz", dict(params=0x00c000 | 0x020000, extra=b"\x02\x2a\x00" + b"\x03" + b"\x25\x82\x27\x00\x00")),
+                     ("basic MCS/NSS map", dict(basic=0xfff0))):
+        out.append(("Beacon HE operation, %s" % name, mgmt(8, 12, ie(0, b"he") + heop(**kw))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))

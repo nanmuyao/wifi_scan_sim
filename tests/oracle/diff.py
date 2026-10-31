@@ -113,6 +113,14 @@ FIELDS += [("mdid", "wlan.mobility_domain.mdid"), ("mde_ft_capab", "wlan.mobilit
 FIELDS += [("ml_type", "wlan.eht.multi_link.control.type"), ("ml_common_len", "wlan.eht.multi_link.common_info.length"),
            ("ml_mld_mac", "wlan.eht.multi_link.common_info.mld_mac_address"),
            ("ml_link_id", "wlan.eht.multi_link.common_info.link_id_subfield.link_id")]
+# HE（802.11ax）能力 / 操作：原始值、MCS 表、操作的主要字段
+FIELDS += [("he_mac", "wlan.ext_tag.he_mac_caps"), ("he_chanwidth", "wlan.ext_tag.he_phy_cap.fbytes"),
+           ("he_rx80", "wlan.ext_tag.he_mcs_map.rx_he_mcs_map_lte_80"), ("he_tx80", "wlan.ext_tag.he_mcs_map.tx_he_mcs_map_lte_80"),
+           ("he_rx160", "wlan.ext_tag.he_mcs_map.rx_he_mcs_map_160"), ("he_tx160", "wlan.ext_tag.he_mcs_map.tx_he_mcs_map_160"),
+           ("he_rx8080", "wlan.ext_tag.he_mcs_map.rx_he_mcs_map_80_80"), ("he_tx8080", "wlan.ext_tag.he_mcs_map.tx_he_mcs_map_80_80"),
+           ("heop_params", "wlan.ext_tag.he_operation.params"), ("heop_pe", "wlan.ext_tag.he_operation.default_pe_duration"),
+           ("heop_twt", "wlan.ext_tag.he_operation.twt_required"), ("heop_vht", "wlan.ext_tag.he_operation.vht_op_info_present"),
+           ("heop_basic", "wlan.ext_tag.he_operation.basic_he_mcs_and_nss")]
 WMM_AC = ("be", "bk", "vi", "vo")
 for _ac in WMM_AC:
     FIELDS += [("wmm_aifsn_" + _ac, "wlan.wfa.ie.wme.acp.aifsn_" + _ac), ("wmm_acm_" + _ac, "wlan.wfa.ie.wme.acp.acm_" + _ac),
@@ -124,7 +132,8 @@ CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multic
                   "rsn_gcs_oui", "rsn_caps", "rsn_mfpr", "rsn_mfpc", "rsn_pmkid_count", "rsn_gmcs",
                   "ht_caps", "ht_ampdu", "ht_mcs0", "ht_txdef", "ht_rate", "ht_primary", "ht_secoff", "ht_width", "ht_rifs",
                   "ht_prot", "extcap_bits", "mdid", "mde_ft_capab", "mde_ft_over_ds", "mde_resource", "idle_period", "idle_options", "idle_protected", "rsnx",
-                  "rsnx_len", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "ml_type", "ml_common_len", "ml_mld_mac", "ml_link_id", "ml_sta_ctrl",
+                  "rsnx_len", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "he_mac", "he_chanwidth", "he_rx80", "he_tx80", "he_rx160", "he_tx160", "he_rx8080", "he_tx8080", "heop_params", "heop_pe",
+                  "heop_twt", "heop_vht", "heop_basic", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "ml_type", "ml_common_len", "ml_mld_mac", "ml_link_id", "ml_sta_ctrl",
                   "ml_sta_link_ids", "wmm_subtype", "wmm_version", "wmm_qos",
                   "wmm_uapsd", "wmm_psc", "wpa_version", "wpa_mcs", *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "acm", "ecwmin", "ecwmax", "txop")], "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
                   "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
@@ -171,14 +180,17 @@ def _norm(name, v):
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
                 "dtim_period", "country_env", "ml_type", "ml_common_len", "ml_link_id", "idle_period", "rsnx_len", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
                 *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "ecwmin", "ecwmax", "txop")], "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
-                "ht_primary"):
+                "ht_primary", "heop_pe"):
         return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
-    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc", "mdid", "mde_ft_capab", "idle_options", "rsnx"):
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc", "mdid", "mde_ft_capab", "idle_options", "rsnx",
+                "he_mac", "he_chanwidth", "he_rx80", "he_tx80", "he_rx160", "he_tx160", "he_rx8080", "he_tx8080", "heop_params", "heop_basic"):
         return int(v, 0)
     if name in ("ssid", "tim_bitmap"):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
     if name == "country":
         return v
+    if name in ("heop_twt", "heop_vht"):
+        return v == "True"
     if name in ("mde_ft_over_ds", "mde_resource", "idle_protected"):      # 带掩码的位字段，显示成「掩码后的值」：非 0 就是置位
         return int(v, 0) != 0
     if name == "datarate":
@@ -380,6 +392,19 @@ def ours_frames(path):
             "ht_width": _ie(r, "ht_op", "width_any"),
             "ht_rifs": _ie(r, "ht_op", "rifs"),
             "ht_prot": _ie(r, "ht_op", "ht_protection"),
+            "he_mac": _ie(r, "he_cap", "mac_caps"),
+            "he_chanwidth": None if _ie(r, "he_cap", "phy0") is None else _ie(r, "he_cap", "phy0") >> 1,    # tshark 的「信道宽度集」= PHY 能力第 0 字节的 bit1-7
+            "he_rx80": _ie(r, "he_cap", "rx_lte80"),
+            "he_tx80": _ie(r, "he_cap", "tx_lte80"),
+            "he_rx160": _ie(r, "he_cap", "rx_160"),
+            "he_tx160": _ie(r, "he_cap", "tx_160"),
+            "he_rx8080": _ie(r, "he_cap", "rx_80p80"),
+            "he_tx8080": _ie(r, "he_cap", "tx_80p80"),
+            "heop_params": _ie(r, "he_op", "params"),
+            "heop_pe": _ie(r, "he_op", "default_pe_duration"),
+            "heop_twt": _ie(r, "he_op", "twt_required"),
+            "heop_vht": _ie(r, "he_op", "vht_op_present"),
+            "heop_basic": _ie(r, "he_op", "basic_mcs_nss"),
             "mdid": _ie(r, "mdie", "mdid"),
             "mde_ft_capab": _ie(r, "mdie", "ft_capab"),
             "mde_ft_over_ds": _ie(r, "mdie", "ft_over_ds"),
