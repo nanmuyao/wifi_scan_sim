@@ -2,22 +2,61 @@
 AIGC:
     Label: "1"
     ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: 0bd2c4904e701d4269608d4ce4d80073_867a159fd44411f180d5525400248c00
-    ReservedCode1: BAFAp1hAkISE4mZDRg5vZAb70Q7PSI8ndn5yEa/Fc6/f4TMcReHqZxgQHYMMursfsW+KROBMzcUP6sv1ZUI+KU8DtE9DljcjvOSM2UvQivKm3phk1dnkluDyN/zw4RtlyXI1XEMa1TO2pPUNYYVlNKrQ/+DKh0snSoAB3bS6FLO2AXPwWrL8c573OBM=
+    ProduceID: 0bd2c4904e701d4269608d4ce4d80073_d13cddfcd54711f1a0da525400393706
+    ReservedCode1: nHSkMJ+r8xLOyLEsdxyyG6AZxxSA1yms0QpGJJHA4cfJK+Cpk/xa6hfexY7T80VLw5SVtUWqpS0qUYSJuzi97e91Feo6KrI2ofX4dVrmgIAmc8r1PX7LlTqD/GpD8FyI8w/wrdeUwWKwAKVr4J0Ht1VP043S8otVzWtfm3lp8LcfjVKQ18kH6IGD0zQ=
     ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: 0bd2c4904e701d4269608d4ce4d80073_867a159fd44411f180d5525400248c00
-    ReservedCode2: BAFAp1hAkISE4mZDRg5vZAb70Q7PSI8ndn5yEa/Fc6/f4TMcReHqZxgQHYMMursfsW+KROBMzcUP6sv1ZUI+KU8DtE9DljcjvOSM2UvQivKm3phk1dnkluDyN/zw4RtlyXI1XEMa1TO2pPUNYYVlNKrQ/+DKh0snSoAB3bS6FLO2AXPwWrL8c573OBM=
+    PropagateID: 0bd2c4904e701d4269608d4ce4d80073_d13cddfcd54711f1a0da525400393706
+    ReservedCode2: nHSkMJ+r8xLOyLEsdxyyG6AZxxSA1yms0QpGJJHA4cfJK+Cpk/xa6hfexY7T80VLw5SVtUWqpS0qUYSJuzi97e91Feo6KrI2ofX4dVrmgIAmc8r1PX7LlTqD/GpD8FyI8w/wrdeUwWKwAKVr4J0Ht1VP043S8otVzWtfm3lp8LcfjVKQ18kH6IGD0zQ=
 ---
+
+
 
 # STM32 WiFi 扫描 · 无硬件仿真开发套件
 
+> ## 项目定位（请先阅读）
+>
+> 这是一个 **802.11 / WiFi 协议学习研究项目**：目标是理解 802.11 协议原理、
+> WiFi 扫描与帧解析机制、WPA2 密钥协商与加密算法，并通过纯 PC 仿真 + 少量
+> 自有设备实践验证。**它不是产品，更不是攻击 / 渗透工具**，不面向任何形式的
+> 未经授权扫描、嗅探、抓包或数据采集。
+>
+> 本项目所有默认演示数据均为程序预置的**伪造 / 公开样例**；真实抓包与 WPA2
+> 解密仅限**自建实验网络与公开样例**。详细约束见下方「合法性边界」。
+
 用 PC 仿真替代实物开发调试 STM32 + ESP8266 的 WiFi 扫描方案。**目标：先跑通逻辑，再买硬件。**
+
+## 合法性边界（使用本项目必须遵守）
+
+本项目仅用于 **802.11 / WiFi 协议的学习研究**。使用前请确认以下边界，任何越过
+边界的使用均不在本项目目的范围内，作者不对滥用行为负责：
+
+1. **仿真数据均为伪造**：默认演示中的 AP、Probe Request、握手与加密流量全部是
+   程序预置的**伪造数据或公开样例**（如 `tests/fixtures/*.pcap`），不来自任何
+   真实网络的采集。
+2. **真实抓包仅限自建实验网络**：如需在真实环境验证帧解析，只能在**自己搭建的
+   实验网络 / 自有设备**上进行，且需在支持监听模式的系统（如 Linux）中操作；
+   macOS 网卡实测不支持 RFMON（见后文），请勿在他人网络或公共网络上抓包。
+3. **WPA2 解密仅限已知口令的自有网络或公开样例**：本仓库的 WPA2 相关功能
+   （PMK 推导、四次握手解析、MIC 校验、CCMP 解密）仅用于已知口令前提下学习
+   协议与算法；不得对他人网络进行口令爆破或解密。
+4. **明确禁止**：口令爆破、抓取/解析他人或公共网络的任何流量、对非自有网络
+   的扫描/嗅探、将本项目用于网络攻击、入侵检测规避或任何非法用途。
+5. **法律提醒**：在不同司法辖区，未经授权监听无线网络可能构成违法。学习
+   802.11 协议请始终使用自建环境。
+
+## 典型用途举例
+
+**家庭自建网络下的个人时间管理**
+
+在家中自建实验网络内，无需依赖任何第三方设备，通过分析本机无线链路上的流量特征（如应用的 TLS 指纹、连接模式等），即可统计抖音、快手等短视频应用的使用时长。这项能力主要用于**个人时间管理**：让用户直观看到每天在短视频上投入了多少时间，帮助其清醒地认知时间的付出，针对"刷视频成瘾"问题进行自我监测与改善。
+
+> 边界说明：上述统计仅适用于**自建实验网络中的自有设备**，属于个人自我管理用途；不涉及对他人在线行为的抓取、识别或监控，亦不得用于任何未经授权的场景。
 
 ## 文件结构
 
 | 文件 | 角色 | 说明 |
 |------|------|------|
-| `esp8266_sim.py` | ESP8266 AT 固件模拟器 | 用 pty 创建虚拟串口，预置 8 个虚拟 AP，响应 AT / AT+CWMODE / AT+CWLAP；阶段 2 扩展：AT+CWSNIFF 开关 promiscuous 嗅探，按间隔主动推送预置的 Probe Request 报告（SSID/MAC/RSSI），支持 `--sniffer-demo` 一键演示 |
+| `esp8266_sim.py` | ESP8266 AT 固件模拟器 | 用 pty 创建虚拟串口，预置 8 个虚拟 AP，响应 AT / AT+CWMODE / AT+CWLAP；阶段 2 扩展：AT+CWSNIFF 开关 promiscuous **嗅探仿真**（FAKE_PROBES 预置伪造 Probe Request，经 pty 虚拟串口主动推送报告），仅用于学习 promiscuous 模式与报告格式，**不读取任何真实网络流量**，支持 `--sniffer-demo` 一键演示 |
 | `ap_parser.c` / `ap_parser.h` | CWLAP 解析库（纯 C） | STM32 核心解析逻辑，无 HAL 依赖，PC 可直接编译测试 |
 | `test_ap_parser.c` | 解析器单元测试 | 7 组用例：正常多 AP / 隐藏 SSID / 转义字符 / 空响应 / 干扰行 / 非法参数 / AT 响应收尾判定 |
 | `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；可读 pcap 文件逐帧解析 |
@@ -26,11 +65,11 @@ AIGC:
 | `tools/make_wpa2_handshake_pcap.py` | 生成四次握手 + CCMP 加密数据帧 pcap 样本 | 用 scapy 构造 802.11 QoS Data + LLC/SNAP + EAPOL M1/M2/M3/M4（KCK 计算真实 MIC）+ 1 帧 CCMP 加密 QoS Data（TK 加密 LLC/SNAP+IP），输出到 `tests/fixtures/wpa2_handshake.pcap` |
 | `stm32_project/` | STM32 完整工程（CubeMX .ioc + 源码） | F103C8T6 + USART1(ESP8266) + USART2(调试)，复用 ap_parser 解析库，修正逐字节接收缓冲、NUL 结尾、帧结束判定（看 OK/ERROR/FAIL 终止行）三处隐患 |
 | `tools/serial_wifi_plot.py` | 串口实时绘图脚本 | 解析 `[i] ch=.. rssi=.. enc=.. ssid=..` 输出，画信道热力图 + RSSI 时间曲线，Ctrl+C 保存 PNG |
-| `docs/Linux抓包操作指引.md` | Linux 监听模式抓包指引（阶段 3） | macOS 无 RFMON 已实测（tcpdump -I 收不到帧），指引用户在有监听模式的 Linux 机器上抓包回传，再用 `wifi_frame_parser.py` 验证；含步骤与常见问题 |
+| `docs/Linux抓包操作指引.md` | Linux 监听模式抓包指引（阶段 3） | macOS 无 RFMON 已实测（tcpdump -I 收不到帧），指引用户在有监听模式的 Linux 机器上、**仅限自建实验网络**抓包回传，再用 `wifi_frame_parser.py` 验证；含步骤与常见问题 |
 | `docs/采购清单与接线方案.md` | 三档采购清单 + 接线图 | 经济档 ¥70 / 标准档 ¥200 / 进阶档 ¥1300（频谱版） |
 | `docs/ESP32版设计文档.md` | ESP32 版设计文档（阶段 5） | 硬件选型差异（ESP32 vs STM32+ESP8266）、软件架构（直扫→解析→聚合→WebSocket/Web Serial 仪表盘）、ESP-IDF/Wokwi/qemu 仿真路径、与阶段1-4 代码复用关系、里程碑拆分与验收标准 |
 | `docs/RTL-SDR频谱方案.md` | RTL-SDR 频谱方案可行性文档（阶段 6 · 路线B） | STM32F7 直解 vs PC 端 rtl_power vs 混合三方案对比、硬件需求与成本、数据率/FFT 瓶颈（4.8-6.4 MB/s I/Q 流 + DMA 乒乓）、软件架构建议、无硬件仿真路径（L1-L4）、可行性结论（F7 算力够、RTL-SDR 覆盖上限 ~1.7GHz 需 upconverter 才能看 2.4GHz WiFi） |
-| `docs/wifi_scan_sim_roadmap_v2.md` | 下一阶段规划（Roadmap v2，阶段 7-11） | 硬件实施（STM32+ESP8266 实物联调）、真实抓包+WPA2 解密实操验证、ESP32 版实现、可视化仪表盘、SDR 频谱仪落地；每阶段含目标/交付物/无硬件仿真路径/验收/优先级与依赖，附建议路线与可并行/跳过项 |
+| `docs/wifi_scan_sim_roadmap_v2.md` | 下一阶段规划（Roadmap v2，阶段 7-11） | 硬件实施（STM32+ESP8266 实物联调）、真实抓包（**仅限自建实验网络**）+WPA2 解密实操验证、ESP32 版实现、可视化仪表盘、SDR 频谱仪落地；每阶段含目标/交付物/无硬件仿真路径/验收/优先级与依赖，附建议路线与可并行/跳过项 |
 
 ## 仿真层次
 
@@ -82,7 +121,11 @@ python3 esp8266_sim.py --manual
 （如 `/dev/ttys007`，波特率无关，pty 无真实波特率），发送 `AT`、`AT+CWMODE=1`、
 `AT+CWLAP` 观察响应。
 
-### 3b. 嗅探演示：promiscuous 模式抓 Probe Request（阶段 2）
+### 3b. 嗅探演示（仿真）：promiscuous 模式下的 Probe Request 处理（阶段 2）
+
+> **仅仿真**：以下演示使用模拟器预置的 `FAKE_PROBES` **伪造探测请求**（非真实网络
+> 采集），用于学习 ESP8266 promiscuous 模式的报告格式与处理流程。真实监听模式
+> 仅限自有设备 / 自建实验网络（见「合法性边界」）。
 
 ```bash
 python3 esp8266_sim.py --sniffer-demo
@@ -96,7 +139,7 @@ Probe Request 报告，格式对齐 kalanda/esp8266-sniffer：
 ```
 
 - 6 条预置虚拟 Probe：含定向探测（目标 SSID）与广播探测（空 SSID，显示 `<broadcast>`）
-- 演示流程：开嗅探 → 自动收集 6 条报告 → 关嗅探 → 打印汇总
+- 演示流程：开嗅探 → 自动收集 6 条预置 FAKE_PROBES 报告 → 关嗅探 → 打印汇总
 - 手动模式下也可用串口工具发 `AT+CWSNIFF=1` / `AT+CWSNIFF=0` 交互观察
 
 ### 4. 802.11 数据包解析（pcap）
@@ -105,16 +148,19 @@ Probe Request 报告，格式对齐 kalanda/esp8266-sniffer：
 # 演示：生成混合流量 pcap（beacon/probe/控制帧/加密数据帧）并逐帧解析
 python3 wifi_frame_parser.py
 
-# 解析真实抓包（macOS 需管理员权限开监听模式）
+# 解析真实抓包（仅限自建实验网络 / 自有设备；macOS 需管理员权限开监听模式）
 sudo tcpdump -I -i en0 -w capture.pcap
 python3 wifi_frame_parser.py --pcap capture.pcap
 ```
+
+> **真实抓包边界**：请在**自己搭建的实验网络**中操作，勿对他人 / 公共网络抓包
+> （详见「合法性边界」）。
 
 > **macOS 监听模式限制（实测）**：Apple Silicon / 802.11ac+ 网卡不支持真 RFMON，
 > `tcpdump -I -i en0` 虽显示 `link-type IEEE802_11_RADIO` 但收不到任何帧（0 packets），
 > `awdl0` 直接报 `doesn't support monitor mode`。解析器已用 demo.pcap（scapy 构造的
 > Radiotap 混合流量，17 帧全类型）与 en0 真实大流量 pcap（17312 帧容器解析）双重验证。
-> 若要真实 802.11 管理帧，需在支持监听模式的 Linux 机器抓包后拿回解析。
+> 若要真实 802.11 管理帧（**仅限自建实验网络**），需在支持监听模式的 Linux 机器抓包后拿回解析。
 
 解析器为纯手写字节级实现（pcap 容器解析 + 802.11 帧解析均不依赖 scapy），支持：
 - 管理帧完整解析：
@@ -161,7 +207,8 @@ python3 tests/test_wpa2_handshake.py
 - 4.1.5 CCMP 解密：nonce = 优先级‖A2‖PN（13 字节），AAD 由 MAC 头屏蔽 FC 高字节
   可变位与 Seq 序号位得到，AES-128-CCM 拼装手写（仅引入 pycryptodome 的 AES 原语），
   解密成功以还原 LLC/SNAP（AA AA 03 00 00 00）+ IP 头为准；
-- 合法边界：仅用于已知口令 / 自建网络研究学习，不做口令爆破。
+- 合法边界：仅用于已知口令 / 自建网络研究学习；**不抓取、不解密他人或公共网络
+  的流量，不做口令爆破**（详见「合法性边界」）。
 
 ## 仿真 vs 真实硬件的差异（务必知晓）
 
@@ -192,4 +239,5 @@ python3 tests/test_wpa2_handshake.py
 ## 协议
 
 [MIT](LICENSE)
+*（内容由AI生成，仅供参考）*
 *（内容由AI生成，仅供参考）*
