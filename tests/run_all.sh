@@ -18,6 +18,7 @@ for t in esp32_project/tests/test_esp32_*.py; do
 done
 run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "差分工具（tshark 对照）" python3 tests/oracle/test_diff.py
+run "帧类型表对照 tshark" python3 tests/oracle/test_subtype_names.py
 run "固件接收链路仿真（真实 main.c <-> esp8266_sim，含故障注入）" python3 tests/test_sim_chain.py
 
 echo; echo "################ 汇总"

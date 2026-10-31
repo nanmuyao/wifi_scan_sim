@@ -37,7 +37,7 @@ check(stats["type_subtype"] == {"ok": 1, "diff": 0, "missing": 1}, "我们少解
 
 print("== 端到端：仓库自带的抓包，tshark 与我们逐帧一致 ==")
 check(diff.tshark_version().startswith(diff.TSHARK_MAJOR_MINOR), "tshark 是 %s.x（实际 %s）" % (diff.TSHARK_MAJOR_MINOR, diff.tshark_version()))
-for rel in ("tests/fixtures/wpa2_handshake.pcap", "wifi_demo_parse.pcap"):
+for rel in ("tests/fixtures/wpa2_handshake.pcap", "wifi_demo_parse.pcap", "demo.pcap"):
     r = diff.diff_file(os.path.join(ROOT, rel))
     bad = sum(v["diff"] + v["missing"] for v in r["stats"].values()) if r["stats"] else -1
     check(r["error"] is None and r["frames"] == r["ours_frames"] > 0 and bad == 0,

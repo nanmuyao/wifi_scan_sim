@@ -28,13 +28,21 @@ MGMT_SUBTYPE = {
     8: "Beacon", 9: "ATIM", 10: "Disassociation", 11: "Authentication",
     12: "Deauthentication", 13: "Action", 14: "Action No Ack",
 }
+# 子类型编号以 tshark 的值表为准（tests/oracle/test_subtype_names.py 逐项对照）。
+# 控制帧 6 是 Control Frame Extension（DMG），帧结构不同，暂未支持。
 CTRL_SUBTYPE = {
-    0: "Control Wrapper", 1: "Block ACK Request", 2: "Block ACK",
-    3: "PS-Poll", 4: "RTS", 5: "CTS", 6: "ACK", 8: "CF-End", 9: "CF-End+CF-Ack",
+    2: "Trigger", 3: "TWT Ack", 4: "Beamforming Report Poll",
+    5: "VHT/HE/EHT/Ranging NDP Announcement", 7: "Control Wrapper",
+    8: "Block ACK Request", 9: "Block ACK", 10: "PS-Poll", 11: "RTS", 12: "CTS",
+    13: "ACK", 14: "CF-End", 15: "CF-End+CF-Ack",
 }
 DATA_SUBTYPE = {
     0: "Data", 1: "Data+CF-Ack", 2: "Data+CF-Poll", 3: "Data+CF-Ack+CF-Poll",
-    4: "Null", 8: "QoS Data", 10: "QoS Null", 12: "QoS Data+CF-Poll",
+    4: "Null", 5: "CF-Ack (no data)", 6: "CF-Poll (no data)",
+    7: "CF-Ack+CF-Poll (no data)",
+    8: "QoS Data", 9: "QoS Data+CF-Ack", 10: "QoS Data+CF-Poll",
+    11: "QoS Data+CF-Ack+CF-Poll", 12: "QoS Null",
+    14: "QoS CF-Poll (no data)", 15: "QoS CF-Ack+CF-Poll (no data)",
 }
 
 
@@ -435,15 +443,14 @@ def parse_ctrl_short(buf):
     """控制帧专用解析：RTS/CTS/ACK/PS-Poll 等短帧（<24 字节，无完整 3 地址头）。"""
     fc = struct.unpack("<H", buf[:2])[0]
     f = parse_frame_control(fc)
-    info = {}
-    if f["subtype"] == 4 and len(buf) >= 16:      # RTS: RA + TA
+    # Frame Control 的标志位在所有帧里都有，控制帧也不例外
+    info = {k: f[k] for k in ("to_ds", "from_ds", "more_frag", "retry", "pwr_mgmt", "more_data", "protected", "order")}
+    if f["subtype"] in (12, 13, 7):               # CTS / ACK / Control Wrapper：只有 RA
+        if len(buf) >= 10:
+            info["ra"] = mac_str(buf[4:10])
+    elif len(buf) >= 16:                          # RTS / PS-Poll / BAR / BA / CF-End 等：RA + TA
         info["ra"] = mac_str(buf[4:10])
         info["ta"] = mac_str(buf[10:16])
-    elif f["subtype"] in (5, 6) and len(buf) >= 10:  # CTS / ACK: RA
-        info["ra"] = mac_str(buf[4:10])
-    elif len(buf) >= 16:                          # PS-Poll / CF-End 等
-        info["addr1"] = mac_str(buf[4:10])
-        info["addr2"] = mac_str(buf[10:16])
     return info
 
 
@@ -492,7 +499,7 @@ def parse_pcap_file(path):
                                 rec["rates"] = m.get("rates_mbps", [])
                 elif fam == "Data":
                     qos_body = body
-                    if h["subtype"] in (8, 9, 10, 12, 13, 14) and len(body) >= 2:
+                    if h["subtype"] & 8 and len(body) >= 2:
                         qos_body = body[2:]  # QoS Data 帧体开头有 2 字节 QoS Control
                     r = parse_data_frame(h, qos_body)
                     rec["encrypted"] = r["encrypted"]
@@ -517,7 +524,7 @@ def print_pcap_report(path):
             print("      error: %s" % r["error"])
             continue
         if "ra" in r:
-            print("      RA=%s" % r["ra"])
+            print("      RA=%s%s" % (r["ra"], ("  TA=%s" % r["ta"]) if "ta" in r else ""))
         if "ta" in r:
             print("      TA=%s" % r["ta"])
         if "addr1" in r:
@@ -601,9 +608,9 @@ def make_demo_pcap(path):
     frames.append(RadioTap() / Dot11(type=0, subtype=5, addr1="12:34:56:78:9a:bc", addr2="a4:83:e7:11:22:02", addr3="a4:83:e7:11:22:02") /
                   Dot11ProbeResp(beacon_interval=100) /
                   Dot11Elt(ID=0, info=b"Paul-Home-2.4G") / Dot11Elt(ID=3, info=bytes([6])))
-    # 控制帧：RTS + ACK（信道竞争最常出现）
-    frames.append(RadioTap() / Dot11(type=1, subtype=4, addr1="a4:83:e7:11:22:02", addr2="12:34:56:78:9a:bc"))
-    frames.append(RadioTap() / Dot11(type=1, subtype=6, addr1="12:34:56:78:9a:bc"))
+    # 控制帧：RTS(11) + ACK(13)（信道竞争最常出现）
+    frames.append(RadioTap() / Dot11(type=1, subtype=11, addr1="a4:83:e7:11:22:02", addr2="12:34:56:78:9a:bc"))
+    frames.append(RadioTap() / Dot11(type=1, subtype=13, addr1="12:34:56:78:9a:bc"))
     # WPA2 加密数据帧（CCMP 头 + 密文）
     frames.append(RadioTap() / Dot11(type=2, subtype=8, addr1="a4:83:e7:11:22:02",
                                     addr2="12:34:56:78:9a:bc", addr3="a4:83:e7:11:22:02",
