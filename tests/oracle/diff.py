@@ -97,19 +97,32 @@ HT_FLAG_FIELDS = {"ldpc": "ldpccoding", "width40": "width", "greenfield": "green
                   "short_gi40": "short40", "tx_stbc": "txstbc", "delayed_ba": "delayedblockack", "max_amsdu_7935": "amsdu",
                   "dsss_cck_40": "dsscck", "psmp": "psmp", "forty_intolerant": "40mhzintolerant", "lsig_txop": "lsig"}
 FIELDS += [("htcap_" + k, "wlan.ht.capabilities." + v) for k, v in HT_FLAG_FIELDS.items()]
+# 厂商元素：WMM（信息 / 参数）与 WPA
+FIELDS += [("wmm_subtype", "wlan.wfa.ie.wme.subtype"), ("wmm_version", "wlan.wfa.ie.wme.version"),
+           ("wmm_qos", "wlan.wfa.ie.wme.qos_info"), ("wmm_uapsd", "wlan.wfa.ie.wme.qos_info.ap.u_apsd"),
+           ("wmm_psc", "wlan.wfa.ie.wme.qos_info.ap.parameter_set_count"),
+           ("wpa_version", "wlan.wfa.ie.wpa.version"), ("wpa_mcs", "wlan.wfa.ie.wpa.mcs.type")]
+WMM_AC = ("be", "bk", "vi", "vo")
+for _ac in WMM_AC:
+    FIELDS += [("wmm_aifsn_" + _ac, "wlan.wfa.ie.wme.acp.aifsn_" + _ac), ("wmm_acm_" + _ac, "wlan.wfa.ie.wme.acp.acm_" + _ac),
+               ("wmm_ecwmin_" + _ac, "wlan.wfa.ie.wme.acp.ecw.min_" + _ac), ("wmm_ecwmax_" + _ac, "wlan.wfa.ie.wme.acp.ecw.max_" + _ac),
+               ("wmm_txop_" + _ac, "wlan.wfa.ie.wme.acp.txop_limit_" + _ac)]
 # 元素内容字段只对管理帧比较：数据帧里 EAPOL-Key 的 Key Data 也带元素，那个缺口已经在「tags」一行单独登记（阶段 D）
 CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multicast", "tim_offset", "tim_bitmap", "country",
                   "country_env", "erp", "erp_present", "erp_protection", "erp_barker", "rsn_version", "rsn_gcs",
                   "rsn_gcs_oui", "rsn_caps", "rsn_mfpr", "rsn_mfpc", "rsn_pmkid_count", "rsn_gmcs",
                   "ht_caps", "ht_ampdu", "ht_mcs0", "ht_txdef", "ht_rate", "ht_primary", "ht_secoff", "ht_width", "ht_rifs",
-                  "ht_prot", "extcap_bits", "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
+                  "ht_prot", "extcap_bits", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "wmm_subtype", "wmm_version", "wmm_qos",
+                  "wmm_uapsd", "wmm_psc", "wpa_version", "wpa_mcs", *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "acm", "ecwmin", "ecwmax", "txop")], "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
                   "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
 # 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
 TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number"),
                 ("rates", "wlan.supported_rates"), ("ext_rates", "wlan.extended_supported_rates"),
                 ("country_fcn", "wlan.country_info.fnm.fcn"), ("country_nc", "wlan.country_info.fnm.nc"),
                 ("country_mtpl", "wlan.country_info.fnm.mtpl"),
-                ("rsn_pcs", "wlan.rsn.pcs.type"), ("rsn_akm", "wlan.rsn.akms.type")]
+                ("rsn_pcs", "wlan.rsn.pcs.type"), ("rsn_akm", "wlan.rsn.akms.type"),
+                ("vendor_oui", "wlan.tag.oui"), ("wfa_type", "wlan.wfa.ie.type"),
+                ("wpa_ucs", "wlan.wfa.ie.wpa.ucs.type"), ("wpa_akm", "wlan.wfa.ie.wpa.akms")]    # akms.type 在 Wireshark 里被登记成了 wlan.wfa.ie.wpa.type，取不到；用完整的 32 位套件值（OUI << 8 | 类型）
 TSHARK_MAJOR_MINOR = "4.4"
 
 
@@ -141,10 +154,11 @@ def _norm(name, v):
         return int(v, 16)
     if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
-                "dtim_period", "country_env", "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
+                "dtim_period", "country_env", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
+                *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "ecwmin", "ecwmax", "txop")], "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
                 "ht_primary"):
         return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
-    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot"):
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc"):
         return int(v, 0)
     if name in ("ssid", "tim_bitmap"):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
@@ -155,7 +169,7 @@ def _norm(name, v):
     if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
         return {"1": True, "0": False}.get(v)
     if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu",
-                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal",
+                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal", "wmm_uapsd", *["wmm_acm_" + ac for ac in WMM_AC],
                 "htcap_ldpc", "htcap_width40", "htcap_greenfield", "htcap_short_gi20", "htcap_short_gi40", "htcap_tx_stbc",
                 "htcap_delayed_ba", "htcap_max_amsdu_7935", "htcap_dsss_cck_40", "htcap_psmp", "htcap_forty_intolerant",
                 "htcap_lsig_txop"):
@@ -210,6 +224,30 @@ def _ie(rec, name, key):
         return None
     e = d.get(name)
     return None if e is None else e[key]
+
+
+def _vendors(rec, value, keep=lambda v: True):
+    """所有厂商元素的某个值（按出现顺序）；这一帧没解码元素时 None。"""
+    d = rec.get("ie")
+    if d is None:
+        return None
+    return [value(v) for v in d["vendors"] if v and keep(v)]
+
+
+def _suite_list_of(rec, name, key):
+    s = _ie(rec, name, key)
+    return None if s is None else [t for _, t in s]
+
+
+def _suite_values(rec, name, key):
+    """套件列表里每个套件的完整 32 位值（OUI << 8 | 类型）；没有时 None。"""
+    s = _ie(rec, name, key)
+    return None if s is None else [oui << 8 | t for oui, t in s]
+
+
+def _wmm_ac(rec, ac, key):
+    ac_d = _ie(rec, "wmm", "ac")
+    return None if ac_d is None else ac_d[ac][key]
 
 
 def _suite_part(rec, key, i):
@@ -303,6 +341,19 @@ def ours_frames(path):
             "ht_width": _ie(r, "ht_op", "width_any"),
             "ht_rifs": _ie(r, "ht_op", "rifs"),
             "ht_prot": _ie(r, "ht_op", "ht_protection"),
+            "vendor_oui": _vendors(r, lambda v: v["oui"]),
+            "wfa_type": _vendors(r, lambda v: v["type"], lambda v: v["oui"] == 0x0050F2),
+            "wpa_ucs": _suite_list_of(r, "wpa", "pairwise"),
+            "wpa_akm": _suite_values(r, "wpa", "akm"),
+            "wpa_version": _ie(r, "wpa", "version"),
+            "wpa_mcs": None if _ie(r, "wpa", "group") is None else _ie(r, "wpa", "group")[1],
+            "wmm_subtype": _ie(r, "wmm", "subtype"),
+            "wmm_version": _ie(r, "wmm", "version"),
+            "wmm_qos": _ie(r, "wmm", "qos_info"),
+            "wmm_uapsd": _ie(r, "wmm", "uapsd"),
+            "wmm_psc": _ie(r, "wmm", "param_set_count"),
+            **{"wmm_%s_%s" % (k, ac): _wmm_ac(r, ac, v) for ac in WMM_AC
+               for k, v in (("aifsn", "aifsn"), ("acm", "acm"), ("ecwmin", "ecw_min"), ("ecwmax", "ecw_max"), ("txop", "txop"))},
             "ht_txrxneq": _ie(r, "ht_cap", "tx_rx_unequal"),
             "ht_txunequal": _ie(r, "ht_cap", "tx_unequal_mod"),
             **{"htcap_" + k: _ie(r, "ht_cap", k) for k in HT_FLAG_FIELDS},

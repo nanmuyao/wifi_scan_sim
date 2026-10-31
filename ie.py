@@ -208,6 +208,81 @@ def ext_cap_bit(octets, n):
     return bool(n // 8 < len(octets) and octets[n // 8] >> (n % 8) & 1)
 
 
+# ---------------------------------------------------------------------------
+# 厂商专用元素（221）：3 字节 OUI + 1 字节厂商自定义类型 + 数据。
+# OUI 0x0050f2（Microsoft / Wi-Fi 联盟早期）：类型 1 = WPA（WPA1），2 = WMM，4 = WPS。
+# ---------------------------------------------------------------------------
+OUI_MICROSOFT, OUI_WFA, OUI_IEEE = 0x0050F2, 0x506F9A, 0x000FAC
+VENDOR_WPA, VENDOR_WMM, VENDOR_WPS = 1, 2, 4
+AC_ORDER = ("be", "bk", "vi", "vo")          # WMM 参数元素里四个访问类别的顺序
+
+
+def decode_wmm(data):
+    """WMM 信息 / 参数元素（OUI 0x0050f2 类型 2）。data 是 OUI 和类型之后的部分：
+    子类型 1 字节（0 = 信息元素，1 = 参数元素，2 = TSPEC）、版本 1 字节、QoS 信息 1 字节；
+    参数元素之后是保留 1 字节和四个访问类别（BE、BK、VI、VO）各 4 字节：ACI/AIFSN（bit0-3 AIFSN，bit4 ACM，bit5-6 ACI）、
+    ECW（低 4 位 ECWmin，高 4 位 ECWmax）、TXOP 限制（16 位小端，单位 32 us）。
+    参数元素的 QoS 信息：bit7 U-APSD，bit0-3 参数集计数。"""
+    if len(data) < 2:
+        return None
+    qos = data[2] if len(data) > 2 else None
+    out = {"subtype": data[0], "version": data[1], "qos_info": qos, "ac": None, "uapsd": None, "param_set_count": None}
+    if data[0] == 1:
+        out["uapsd"] = None if qos is None else bool(qos >> 7 & 1)
+        out["param_set_count"] = None if qos is None else qos & 0x0F
+        if len(data) >= 20:                  # 子类型 1 + 版本 1 + QoS 信息 1 + 保留 1 + 4 个类别各 4 字节
+            out["ac"] = {}
+            for i, name in enumerate(AC_ORDER):
+                b = data[4 + 4 * i:8 + 4 * i]
+                out["ac"][name] = {"aci_aifsn": b[0], "aifsn": b[0] & 0x0F, "acm": bool(b[0] >> 4 & 1), "aci": b[0] >> 5 & 3,
+                                   "ecw": b[1], "ecw_min": b[1] & 0x0F, "ecw_max": b[1] >> 4, "txop": b[2] | b[3] << 8}
+    return out
+
+
+def decode_wpa(data):
+    """WPA（WPA1）厂商元素（OUI 0x0050f2 类型 1）：布局同 RSN（版本、组密码、成对套件、AKM），套件 OUI 是 0x0050f2，
+    没有能力字段。data 是类型之后的部分。"""
+    n = len(data)
+    if n < 2:
+        return None
+    out = {"version": data[0] | data[1] << 8, "group": None, "pairwise": None, "akm": None, "malformed": False}
+    p = 2
+    if n - p >= 4:
+        out["group"] = _suite(data[p:p + 4])
+        p += 4
+        for key in ("pairwise", "akm"):
+            if n - p < 2:
+                return out
+            cnt = data[p] | data[p + 1] << 8
+            p += 2
+            if p + 4 * cnt > n:
+                out["malformed"] = True
+                return out
+            out[key] = [_suite(data[p + 4 * i:p + 4 * i + 4]) for i in range(cnt)]
+            p += 4 * cnt
+    return out
+
+
+def decode_vendor(d):
+    """通用解码：{"oui", "type", "data"（类型之后的全部）}，再按 OUI / 类型挂上专用解码："wmm" 或 "wpa"。不足 3 字节 OUI 返回 None。"""
+    if len(d) < 3:
+        return None
+    oui = d[0] << 16 | d[1] << 8 | d[2]
+    typ = d[3] if len(d) > 3 else None
+    out = {"oui": oui, "type": typ, "data": bytes(d[4:]), "wmm": None, "wpa": None}
+    if oui == OUI_MICROSOFT:
+        if typ == VENDOR_WMM:
+            out["wmm"] = decode_wmm(d[4:])
+        elif typ == VENDOR_WPA:
+            out["wpa"] = decode_wpa(d[4:])
+    return out
+
+
+def vendor_elements(els):
+    """所有厂商元素（221）的解码结果，按出现顺序。数据不合规的元素在列表里是 None，位置不变。"""
+    return [decode_vendor(e.data) for e in els if e.id == 221]
+
+
 # 元素 ID -> (名字, 解码函数)
 DECODERS = {
     0: ("ssid", decode_ssid),
@@ -233,4 +308,10 @@ def decode_all(els):
             r = spec[1](e.data)
             if r is not None:
                 out[spec[0]] = r
+    vs = vendor_elements(els)
+    out["vendors"] = vs                      # 全部厂商元素，按出现顺序
+    for key in ("wmm", "wpa"):               # WMM / WPA 取第一个
+        first = next((v[key] for v in vs if v and v[key]), None)
+        if first is not None:
+            out[key] = first
     return out

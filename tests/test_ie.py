@@ -182,12 +182,62 @@ check(ie.ext_cap_bit([0] * 9 + [0x10], 76) and not ie.ext_cap_bit([0] * 9 + [0x1
 check(ie.ext_cap_bit([0] * 9 + [0x01], 72) and not ie.ext_cap_bit([0] * 9 + [0x01], 73), "bit72 = 第 9 字节的 bit0")
 check(not ie.ext_cap_bit([0xff], 8) and not ie.ext_cap_bit([], 0), "超出元素长度的位视为 0")
 
+print("== 厂商元素 / WMM / WPA ==")
+v = ie.decode_vendor(b"\x00\x11\x22\x33\x44\x55")
+check((v["oui"], v["type"], v["data"], v["wmm"], v["wpa"]) == (0x001122, 0x33, b"\x44\x55", None, None), "通用：OUI 3 字节、类型 1 字节、其余是数据")
+check(ie.decode_vendor(b"\x00\x11\x22")["type"] is None and ie.decode_vendor(b"\x00\x11") is None, "只有 OUI：类型 None；不足 3 字节：不合规")
+check(ie.decode_vendor(b"\x50\x6f\x9a\x09")["oui"] == 0x506F9A, "OUI 按大端拼成整数（50:6f:9a -> 0x506f9a）")
+info = ie.decode_vendor(b"\x00\x50\xf2\x02\x00\x01\x0f")["wmm"]
+check((info["subtype"], info["version"], info["qos_info"], info["ac"], info["uapsd"], info["param_set_count"]) == (0, 1, 0x0f, None, None, None),
+      "WMM 信息元素：子类型 0、版本 1、QoS 信息 0x0f；没有访问类别参数，键仍然齐全")
+param = (b"\x00\x50\xf2\x02\x01\x01" + bytes([0x85, 0]) + bytes([0x03, 0xa4]) + struct.pack("<H", 0)
+         + bytes([0x27, 0xb5]) + struct.pack("<H", 1) + bytes([0x52, 0x43]) + struct.pack("<H", 3008) + bytes([0x62, 0x32]) + struct.pack("<H", 47))
+check(len(param) == 24, "WMM 参数元素共 24 字节：OUI 3 + 类型 1 + 子类型 1 + 版本 1 + QoS 1 + 保留 1 + 4 个类别各 4（手算）")
+w = ie.decode_vendor(param)["wmm"]
+check((w["subtype"], w["qos_info"], w["uapsd"], w["param_set_count"]) == (1, 0x85, True, 5), "参数元素：QoS 信息 0x85 -> U-APSD 开、参数集计数 5")
+check(w["ac"]["be"] == {"aci_aifsn": 0x03, "aifsn": 3, "acm": False, "aci": 0, "ecw": 0xa4, "ecw_min": 4, "ecw_max": 10, "txop": 0}, "BE：AIFSN 3、ECWmin 4、ECWmax 10")
+check(w["ac"]["bk"]["aifsn"] == 7 and w["ac"]["bk"]["aci"] == 1 and w["ac"]["bk"]["ecw_min"] == 5 and w["ac"]["bk"]["ecw_max"] == 11 and w["ac"]["bk"]["txop"] == 1,
+      "BK：ACI 1（0x27 的 bit5-6）、AIFSN 7")
+check(w["ac"]["vi"]["acm"] is True and w["ac"]["vi"]["aifsn"] == 2 and w["ac"]["vi"]["aci"] == 2 and w["ac"]["vi"]["txop"] == 3008, "VI：ACM 置位（0x52 的 bit4）、AIFSN 2、TXOP 3008")
+check(w["ac"]["vo"]["aci"] == 3 and w["ac"]["vo"]["ecw_min"] == 2 and w["ac"]["vo"]["ecw_max"] == 3 and w["ac"]["vo"]["txop"] == 47, "VO：ACI 3、ECWmin 2、ECWmax 3、TXOP 47（小端）")
+short = ie.decode_vendor(param[:-1])["wmm"]
+check(short["subtype"] == 1 and short["ac"] is None and short["uapsd"] is True, "参数元素缺 1 字节：访问类别不解（None），QoS 信息照常")
+check(ie.decode_vendor(b"\x00\x50\xf2\x02\x01")["wmm"] is None, "WMM 不足子类型 + 版本：None")
+wpa = b"\x00\x50\xf2\x01" + LE(1) + S(2, b"\x00\x50\xf2") + LE(2) + S(4, b"\x00\x50\xf2") + S(2, b"\x00\x50\xf2") + LE(1) + S(2, b"\x00\x50\xf2")
+p = ie.decode_vendor(wpa)["wpa"]
+check(p["version"] == 1 and p["group"] == (0x0050f2, 2) and p["pairwise"] == [(0x0050f2, 4), (0x0050f2, 2)] and p["akm"] == [(0x0050f2, 2)] and not p["malformed"],
+      "WPA：版本 1、组密码 TKIP、成对 CCMP + TKIP、AKM PSK，套件 OUI 是 0x0050f2")
+p = ie.decode_vendor(b"\x00\x50\xf2\x01" + LE(1) + S(2, b"\x00\x50\xf2") + LE(5) + S(4, b"\x00\x50\xf2"))["wpa"]
+check(p["malformed"] and p["group"] == (0x0050f2, 2) and p["pairwise"] is None, "WPA 成对套件计数 5 而只有 1 个：畸形，组密码保留")
+check(ie.decode_vendor(b"\x00\x50\xf2\x01\x01")["wpa"] is None, "WPA 不足版本号：None")
+check(ie.decode_vendor(b"\x00\x50\xf2\x04\x10\x4a")["wmm"] is None and ie.decode_vendor(b"\x00\x50\xf2\x04\x10\x4a")["wpa"] is None, "类型 4（WPS）不挂专用解码")
+check(ie.decode_vendor(b"\x00\x10\x18\x02\x01")["wmm"] is None, "同样的类型 2 但 OUI 不是 0x0050f2（Broadcom）：不当 WMM 解")
+els, _ = ie.walk(b"\xdd\x04\x00\x11\x22\x33" + b"\xdd\x02\x00\x11" + b"\xdd\x07\x00\x50\xf2\x02\x00\x01\x0f")
+vs = ie.vendor_elements(els)
+check([v["oui"] if v else None for v in vs] == [0x001122, None, 0x0050f2], "vendor_elements：按出现顺序，不合规的位置是 None")
+d = ie.decode_all(els)
+check(len(d["vendors"]) == 3 and d["wmm"]["subtype"] == 0 and "wpa" not in d, "decode_all：vendors 是全部，wmm 取第一个，没有 WPA 就没有这个键")
+
+print("== 厂商元素的边界 ==")
+check(ie.decode_vendor(b"\x00\x11\x22\x33")["type"] == 0x33 and ie.decode_vendor(b"\x00\x11\x22\x33")["data"] == b"", "OUI + 类型正好 4 字节：类型有，数据为空")
+check(ie.decode_vendor(b"\x00\x10\x18\x02\x00\x01\x0f")["wmm"] is None, "Broadcom（0x001018）的类型 2 + 与 WMM 信息元素一样的数据：不当 WMM")
+check(ie.decode_vendor(b"\x00\x50\xf3\x02\x00\x01\x0f")["wmm"] is None, "OUI 差 1（0x0050f3）：不当 WMM")
+two = ie.decode_vendor(b"\x00\x50\xf2\x02\x00\x01")["wmm"]
+check(two is not None and two["subtype"] == 0 and two["version"] == 1 and two["qos_info"] is None, "WMM 数据正好 2 字节（子类型 + 版本）：解得出来，QoS 信息 None")
+p_ = ie.decode_vendor(b"\x00\x50\xf2\x02\x01\x01\x8f\x00" + bytes([0x0f, 0xff, 0, 0]) + bytes(12))["wmm"]
+check(p_["param_set_count"] == 15 and p_["uapsd"] is True and p_["ac"]["be"]["aifsn"] == 15 and p_["ac"]["be"]["ecw_min"] == 15 and p_["ac"]["be"]["ecw_max"] == 15,
+      "参数集计数、AIFSN、ECW 都是满 4 位（15），不是 3 位")
+tspec = ie.decode_vendor(b"\x00\x50\xf2\x02\x02\x01\x8f\x00" + bytes(16))["wmm"]
+check(tspec["subtype"] == 2 and tspec["uapsd"] is None and tspec["param_set_count"] is None and tspec["ac"] is None, "子类型 2（TSPEC）：不按参数元素解")
+els, _ = ie.walk(b"\xdd\x07\x00\x50\xf2\x02\x00\x01\x01" + b"\xdd\x07\x00\x50\xf2\x02\x00\x01\x02")
+check(ie.decode_all(els)["wmm"]["qos_info"] == 1 and len(ie.decode_all(els)["vendors"]) == 2, "两个 WMM 元素：wmm 取第一个，vendors 里有两个")
+
 print("== decode_all ==")
 els, _ = ie.walk(b"\x00\x01a\x00\x01b\x03\x01\x06\x05\x01\x00\xff\x02\x23\x00")
 d = ie.decode_all(els)
 check(d["ssid"] == {"ssid": b"a"} and d["ds"] == {"channel": 6}, "同一种元素只取第一次出现的")
 check("tim" not in d, "数据不合规的元素不出现在结果里")
-check(set(d) == {"ssid", "ds"}, "扩展元素（ID 255）不按普通元素 ID 解码")
+check(set(d) - {"vendors"} == {"ssid", "ds"} and d["vendors"] == [], "扩展元素（ID 255）不按普通元素 ID 解码；没有厂商元素时 vendors 是空列表")
 
 print("== 固定部分长度表 ==")
 check(ie.FIXED_LEN == {0: 4, 1: 6, 2: 10, 3: 6, 4: 0, 5: 12, 8: 12, 10: 2, 11: 6, 12: 2}, "各管理帧子类型（已由合成帧对照 tshark）")

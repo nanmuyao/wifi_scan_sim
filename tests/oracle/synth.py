@@ -110,6 +110,22 @@ def cases():
             octets = bytearray(n)
             octets[bit // 8] |= 1 << (bit % 8)
             out.append(("Beacon ext caps, %d bytes, only bit %d" % (n, bit), mgmt(8, 12, ie(0, b"x") + ie(127, bytes(octets)))))
+    # 厂商元素：WMM 信息 / 参数、WPA、WPS、未知厂商、多个厂商元素
+    def wmm_param(qos=0x01, acs=((0x03, 0xa4, 0x0000), (0x27, 0xa4, 0x0000), (0x42, 0x43, 0x005e), (0x62, 0x32, 0x002f))):
+        body = b"\x00\x50\xf2\x02\x01\x01" + bytes([qos, 0])
+        for aci, ecw, txop in acs:
+            body += bytes([aci, ecw]) + struct.pack("<H", txop)
+        return body
+
+    out.append(("Beacon WMM parameter element", mgmt(8, 12, ie(0, b"w") + ie(221, wmm_param()))))
+    out.append(("Beacon WMM parameter: U-APSD, set count 5, ACM on VI, TXOP 3008", mgmt(8, 12, ie(0, b"w") + ie(221, wmm_param(qos=0x85, acs=((0x03, 0xa4, 0x0000), (0x27, 0xa4, 0x0000), (0x52, 0x43, 0x0bc0), (0x62, 0x32, 0x002f)))))))
+    out.append(("Assoc Request WMM information element", mgmt(0, 4, ie(0, b"w") + ie(221, b"\x00\x50\xf2\x02\x00\x01\x0f"))))
+    out.append(("Assoc Request WMM information: U-APSD for VO, max SP 2", mgmt(0, 4, ie(0, b"w") + ie(221, b"\x00\x50\xf2\x02\x00\x01\x41"))))
+    wpa = b"\x00\x50\xf2\x01" + le(1) + s(2, oui=b"\x00\x50\xf2") + le(2) + s(4, oui=b"\x00\x50\xf2") + s(2, oui=b"\x00\x50\xf2") + le(1) + s(2, oui=b"\x00\x50\xf2")
+    out.append(("Beacon WPA element TKIP + CCMP, PSK", mgmt(8, 12, ie(0, b"w") + ie(221, wpa))))
+    out.append(("Beacon WPA element, 802.1X", mgmt(8, 12, ie(0, b"w") + ie(221, b"\x00\x50\xf2\x01" + le(1) + s(4, oui=b"\x00\x50\xf2") + le(1) + s(4, oui=b"\x00\x50\xf2") + le(1) + s(1, oui=b"\x00\x50\xf2")))))
+    out.append(("Beacon WPS + unknown vendors in order", mgmt(8, 12, ie(0, b"v") + ie(221, b"\x00\x50\xf2\x04\x10\x4a\x00\x01\x10") + ie(221, b"\x00\x11\x22\x33\x44") + ie(221, wmm_param()) + ie(221, b"\xaa\xbb\xcc"))))
+    out.append(("Beacon WPA, WMM, vendor, RSN together", mgmt(8, 12, ie(0, b"v") + ie(48, rsn_wpa2) + ie(221, wpa) + ie(221, wmm_param()))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))

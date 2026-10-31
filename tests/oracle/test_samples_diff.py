@@ -27,6 +27,9 @@ KNOWN_GAPS = {
     "ext_rates": (2, 0),
     # 6 帧 SAE 认证里的扩展元素 114（AKM Suite Selector），tshark 也按 RSN 的 AKM 列出来（阶段 E）
     "rsn_akm": (0, 6),
+    # 一帧 Multi-Link 里嵌套的子元素带了厂商元素（WMM），tshark 一并列出
+    "vendor_oui": (1, 0),
+    "wfa_type": (1, 0),
 }
 failures = []
 

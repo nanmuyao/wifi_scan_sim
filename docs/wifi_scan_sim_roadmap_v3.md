@@ -91,7 +91,18 @@ PMKID 列表、组管理密码套件。套件表示成 (OUI, 类型)，OUI 为 0
 - HT 操作里「任意宽度」和 RIFS 两位，测试帧里同时置位，互换看不出来；现在各自单独置位。
 - tshark 的 `wlan.extcap` 字段不是每个字节都输出，不能拿来当完整字节列表对照，改成对照位集合。
 另外 tshark 会把 HT 操作里的「基本 MCS 集」也按 MCS 集字段输出，所以合成的 HT 操作帧要先放 HT 能力元素（真实信标帧本来就是这个顺序）。
-下一步：厂商元素（221：WPA / WMM / WPS 等），再到 FT / 移动域、RSNXE，最后是扩展元素 HE / EHT / Multi-Link。
+### 厂商专用元素（C2d）
+`decode_vendor` 通用解码（OUI、类型、数据），`vendor_elements` 返回一帧里**全部**厂商元素（按出现顺序），
+再按 OUI 0x0050f2 挂上专用解码：WMM（信息元素与参数元素：QoS 信息、U-APSD、参数集计数，BE/BK/VI/VO 四个访问类别各自的 AIFSN、ACM、ACI、ECWmin/max、TXOP）和
+WPA（WPA1：版本、组密码、成对套件、AKM；布局同 RSN，套件 OUI 是 0x0050f2）。
+与 tshark 在 24 个样例上一致：WMM 3438 帧（其中参数元素 3412 帧，四个访问类别的每个参数都对照）、WPA 490 帧、厂商元素 OUI 列表 3970 帧。
+唯一的差异是前面那几帧 Multi-Link 嵌套里的厂商元素（1 帧，已登记）。
+这一步发现并修掉：WMM 参数元素的长度下限我写成 19，少 1 字节时会越界（真实帧都完整，样例看不出来，单元测试抓到）；
+`decode_wmm` 在信息元素时没有 `uapsd` 键（同 RSN 一样：键必须总是齐）。
+**Wireshark 的一个命名问题**：WPA 元素的 AKM 类型被登记在 `wlan.wfa.ie.wpa.type` 这个名字下（和元素类型同名），
+`wlan.wfa.ie.wpa.akms.type` 永远是空的；差分工具改用同一棵树里完整的 32 位套件值 `wlan.wfa.ie.wpa.akms`。
+还没做的厂商元素：WPS（0x0050f2 类型 4）、Wi-Fi 联盟 0x506f9a 的 P2P / MBO / Hotspot 2.0 等，目前只有通用的 OUI / 类型 / 数据。
+下一步：FT / 移动域、RSNXE，最后是扩展元素 HE / EHT / Multi-Link。
 还没对照的帧层内容：A-MSDU 内部结构、Action 帧各类别。
 
 ## 2. 验证方法（贯穿所有阶段）
