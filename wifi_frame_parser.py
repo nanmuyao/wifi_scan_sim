@@ -20,6 +20,7 @@ import struct
 import zlib
 
 import action
+import amsdu
 import capture
 import ie
 import radiotap
@@ -550,7 +551,12 @@ def parse_pcap_file(path):
                                 rec["channel"] = m["channel"]
                                 rec["rates"] = m.get("rates_mbps", [])
                 elif fam == "Data":
-                    if not h["protected"] and len(body) >= 3:
+                    if h["qos"] and h["qos"]["amsdu"] and not h["protected"] and body:
+                        rec["amsdu"] = amsdu.parse(body)      # A-MSDU：帧体是一串子帧（明文才能读）
+                        subs = rec["amsdu"]["subframes"]
+                        if subs and subs[0]["payload"]:
+                            rec["llc_dsap"] = subs[0]["payload"][0]      # 第一个子帧的数据以 LLC 开头：验证子帧数据的偏移
+                    elif not h["protected"] and len(body) >= 3:
                         rec["llc_dsap"] = body[0]    # 明文数据帧体以 LLC/SNAP 开头；差分测试借它验证头长度
                     r = parse_data_frame(h, body)
                     rec["encrypted"] = r["encrypted"]

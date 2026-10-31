@@ -206,6 +206,30 @@ def cases():
     out.append(("Action Radio Measurement request", frame(0, 13, body=bytes([5, 0, 1, 0, 0]))))
     out.append(("Action Public Action", frame(0, 13, body=bytes([4, 4, 1]))))
     out.append(("Action protected (body is ciphertext)", frame(0, 13, prot=1, body=bytes([3, 0, 1]) + bytes(range(20)))))
+    # A-MSDU：QoS 数据帧的帧体是一串子帧（DA 6 + SA 6 + 长度 2 大端 + 数据 + 填充到 4 字节）
+    def sub(da, sa, payload, pad=True):
+        sf = da + sa + struct.pack(">H", len(payload)) + payload
+        return sf + (b"\x00" * (-len(sf) % 4) if pad else b"")
+
+    # 以太类型用 0x88b5（本地实验用），避免 tshark 去解析子帧里我随手填的 IP / ARP 数据
+    llc = lambda t: b"\xaa\xaa\x03\x00\x00\x00" + struct.pack(">H", t)       # noqa: E731
+    ma, mb, mc = (bytes.fromhex(x) for x in ("020000000001", "020000000002", "020000000003"))
+
+    def amsdu_frame(body, **kw):
+        return frame(2, 8, 1, 0, qos=qos_word(amsdu=1), body=body, **kw)
+
+    out.append(("A-MSDU one subframe", amsdu_frame(sub(ma, mb, llc(0x88b5) + b"abc", pad=False))))
+    out.append(("A-MSDU two subframes, padded", amsdu_frame(sub(ma, mb, llc(0x88b5) + b"abc") + sub(mb, ma, llc(0x88b5) + b"defgh", pad=False))))
+    for n in range(1, 5):
+        out.append(("A-MSDU payload sizes need %d bytes of padding" % ((-(14 + 8 + n)) % 4),
+                    amsdu_frame(sub(ma, mb, llc(0x88b5) + b"x" * n) + sub(mc, ma, llc(0x88b5) + b"y", pad=False))))
+    out.append(("A-MSDU three subframes", amsdu_frame(sub(ma, mb, llc(0x88b5) + b"1" * 20) + sub(mb, mc, llc(0x88b5) + b"2" * 28) + sub(mc, ma, llc(0x88b5) + b"3" * 9, pad=False))))
+    out.append(("A-MSDU last subframe padded too", amsdu_frame(sub(ma, mb, llc(0x88b5) + b"abc") + sub(mb, ma, llc(0x88b5) + b"de"))))
+    # （长度 0 的子帧不放进对照：tshark 在它那里停止解析，我们继续，见 amsdu.py 的说明和 tests/test_amsdu.py）
+    out.append(("A-MSDU last subframe cut short", amsdu_frame(sub(ma, mb, llc(0x88b5) + b"abc") + sub(mb, ma, llc(0x88b5) + b"defghij", pad=False)[:-3])))
+    out.append(("A-MSDU LLC with different DSAP and SSAP", amsdu_frame(sub(ma, mb, b"\xf0\xf1\x03" + b"abcd", pad=False))))
+    out.append(("A-MSDU FromDS", frame(2, 8, 0, 1, qos=qos_word(amsdu=1), body=sub(ma, mb, llc(0x88b5) + b"q", pad=False))))
+    out.append(("A-MSDU protected (ciphertext)", frame(2, 8, 1, 0, prot=1, qos=qos_word(amsdu=1), body=bytes(range(40)))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))

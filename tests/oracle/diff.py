@@ -240,6 +240,10 @@ def tshark_frames(path):
     cmd3 = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=f"]
     for n in bits:
         cmd3 += ["-e", "wlan.extcap.b%d" % n]
+    cmd4 = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=a", "-E", "aggregator=,",
+            "-e", "wlan_aggregate.a_msdu.length", "-e", "wlan.da", "-e", "wlan.sa"]
+    r4 = subprocess.run(cmd4, capture_output=True, text=True)
+    lines4 = r4.stdout.split("\n")
     r = subprocess.run(cmd, capture_output=True, text=True)
     r2 = subprocess.run(cmd2, capture_output=True, text=True)
     r3 = subprocess.run(cmd3, capture_output=True, text=True)
@@ -259,6 +263,14 @@ def tshark_frames(path):
             fr[name] = [int(x, 0) for x in p2[j].split(",") if x]
         p3 = (lines3[i].split("\t") if i < len(lines3) else []) + [""] * len(bits)
         fr["extcap_bits"] = [n for n, v in zip(bits, p3) if v == "True"]
+        p4 = (lines4[i].split("\t") if i < len(lines4) else []) + ["", "", ""]
+        fr["amsdu_len"] = [int(x) for x in p4[0].split(",") if x]
+        # A-MSDU 帧里 wlan.da / wlan.sa 出现多次（每个子帧一次），外层头的 DA / SA 不再单独有意义
+        k = len(fr["amsdu_len"])
+        fr["amsdu_da"] = [x for x in p4[1].split(",") if x][-k:] if k else []       # 只取最后 k 个：外层头的 SA 也会在列表里
+        fr["amsdu_sa"] = [x for x in p4[2].split(",") if x][-k:] if k else []
+        if fr["amsdu_len"]:
+            fr["da"] = fr["sa"] = None
         if fr["type_subtype"] not in (0x0d, 0x0e):
             for name in ACTION_ONLY:
                 fr[name] = None
@@ -406,6 +418,9 @@ def ours_frames(path):
             "amsdu": None if "qos_amsdu" not in r else bool(r["qos_amsdu"]),
             "htc": r.get("htc"),
             "llc_dsap": r.get("llc_dsap"),
+            "amsdu_len": None if r.get("amsdu") is None else [x["length"] for x in r["amsdu"]["subframes"]],
+            "amsdu_da": None if r.get("amsdu") is None else [x["da"] for x in r["amsdu"]["subframes"]],
+            "amsdu_sa": None if r.get("amsdu") is None else [x["sa"] for x in r["amsdu"]["subframes"]],
             "tags": r.get("ie_ids"),
             "ext_tags": r.get("ie_ext_ids"),
             "rates": _flat(r, "rates"),
@@ -517,7 +532,7 @@ def ours_frames(path):
     return out
 
 
-LIST_FIELDS = [name for name, _ in TSHARK_EXTRA] + ["extcap_bits"]       # 信息元素编号列表：按顺序整个比较
+LIST_FIELDS = [name for name, _ in TSHARK_EXTRA] + ["extcap_bits", "amsdu_len", "amsdu_da", "amsdu_sa"]       # 信息元素编号列表：按顺序整个比较
 
 
 def compare(oracle, ours):

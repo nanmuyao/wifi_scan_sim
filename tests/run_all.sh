@@ -19,6 +19,7 @@ for t in esp32_project/tests/test_esp32_*.py; do
 done
 run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "差分工具（tshark 对照）" python3 tests/oracle/test_diff.py
+run "A-MSDU 子帧" python3 tests/test_amsdu.py
 run "Action 帧解码" python3 tests/test_action.py
 run "Action 类别名称对照 tshark" python3 tests/oracle/test_action_names.py
 run "信息元素遍历" python3 tests/test_ie.py
