@@ -454,7 +454,7 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 | TDLS | G | `wpa-test-decode-tdls` | **已完成**（TPK、两个 MIC、直连帧） |
 | Extended Key ID | G | `wpa_ptk_extended_key_id` | **已完成**（新旧两把 PTK 靠 MIC 区分） |
 | 解密后的内容（ARP / IP / UDP / TCP / ICMP / DHCP）与校验和 | F | 全部 | **已完成**：1301 个数据帧，校验和全部吻合（13 个测试图案的 ICMP 例外，tshark 同报 Bad） |
-| Mesh 元素（Mesh ID、Mesh Configuration） | G | 无样例 | **已完成**，用 31 个合成帧逐字段对照 tshark（每一位单独变化）；Mesh 对等管理 / 认证（AMPE）没做，无样例也无合成参照 |
+| Mesh 元素（Mesh ID、Mesh Configuration） | G | 无样例 | **已完成**，用 26 个合成帧逐字段对照 tshark（每一位单独变化）；Mesh 对等管理 / 认证（AMPE）没做，无样例也无合成参照 |
 | 包 `wifi80211/` | — | — | **已完成**（模块列表见 `wifi80211/__init__.py`；`wpa2_handshake.py` 是早期实现，保留作历史） |
 
 ## 5. 硬件怎么看（给不熟悉硬件的读者）
