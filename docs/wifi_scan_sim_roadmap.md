@@ -40,8 +40,8 @@ GitHub 上无全栈完全一致的同类项目（STM32+AT 扫描+802.11 帧解�
 | 阶段 | 内容 | 参考项目 | 状态 |
 |---|---|---|---|
 | 阶段 1 方案A基础 | STM32+ESP8266 AT 扫描、CWLAP 解析、pty 仿真、802.11 帧解析、采购清单 | ximtech/ESP8266Wifi、wraith-wireless/itamae、flupzor/packetparser | 已完成 |
-| 阶段 2 嗅探扩展 | 移植 ESP8266 deauther/promiscuous 思路，输出 Probe Request 的 SSID/MAC/RSSI 报告 | kalanda/esp8266-sniffer、xiixim101-pixel/sniffus | 待做 |
-| 阶段 3 真实抓包验证 | Linux 机器监听模式抓包回传，用现有解析器验证；macOS 无 RFMON 已实测确认 | —（本机验证流程） | 待做 |
+| 阶段 2 嗅探扩展 | 移植 ESP8266 deauther/promiscuous 思路，输出 Probe Request 的 SSID/MAC/RSSI 报告 | kalanda/esp8266-sniffer、xiixim101-pixel/sniffus | 已完成（AT+CWSNIFF/--sniffer-demo 的 FAKE_PROBES 嗅探演示） |
+| 阶段 3 真实抓包验证 | Linux 机器监听模式抓包回传，用现有解析器验证；macOS 无 RFMON 已实测确认 | —（本机验证流程） | 已完成（docs/Linux抓包操作指引.md） |
 | 阶段 4 WPA2 离线解密 | 已知口令前提下：PBKDF2 推 PMK → 解析 EAPOL 四次握手 → 推 PTK → MIC 校验 → CCMP 解密数据帧；纯离线 pcap，详见 4.1 | florenzi002/WPA-Analyzer、junan-98/WPA2_Decrypt、william-r-dieter/pyDot11、mfontanini/dot11decrypt | 已完成（4.1.1~4.1.5 全链路） |
 | 阶段 5 ESP32 版 | ESP32 直扫 + Web 仪表盘 | xiixim101-pixel/sniffus（Web Serial UI） | 待做 |
 | 阶段 6 路线B 频谱 | RTL-SDR 下变频 + STM32 FFT（可行性验证，详见 docs/RTL-SDR频谱方案.md） | vpecanins/stm32f7-rtlsdr；备选 PC 端 rtl_power 出图 | 已完成 |
@@ -83,8 +83,8 @@ GitHub 上无全栈完全一致的同类项目（STM32+AT 扫描+802.11 帧解�
 - RTL-SDR 数据率风险：USB Host 搬运 + FFT 计算量大，STM32F103 不足，路线 B 需 F4/F7 级芯片（采购清单已分档）
 
 ## 6. 下一步行动清单（TODO，带优先级）
-- P0：阶段2 嗅探演示脚本（基于现有 pty 仿真扩展 probe 嗅探输出）
-- P0：阶段3 准备 Linux 抓包操作指引（发给用户手动执行）
+- ~~P0：阶段2 嗅探演示脚本（基于现有 pty 仿真扩展 probe 嗅探输出）~~（已完成：esp8266_sim.py 增加 AT+CWSNIFF/--sniffer-demo，预置 FAKE_PROBES 主动上报 Probe Request 的 SSID/MAC/RSSI）
+- ~~P0：阶段3 准备 Linux 抓包操作指引（发给用户手动执行）~~（已完成：docs/Linux抓包操作指引.md，含监听模式开启/抓包回传/解析验证步骤）
 - ~~P1：阶段4 WPA2 离线解密：先做 4.1.1 PMK + 标准向量单测，再做 4.1.2 EAPOL 解析~~（已完成：4.1.1~4.1.5 全链路，含 fixture 闭环与单测）
 - ~~P1：阶段5 ESP32 版设计文档~~（已完成：docs/ESP32版设计文档.md，含硬件选型/软件架构/仿真路径/复用关系/里程碑验收）
 - ~~P2：阶段6 RTL-SDR 频谱方案可行性验证~~（已完成：docs/RTL-SDR频谱方案.md，含三方案对比/硬件成本/数据率-FFT 瓶颈/软件架构/无硬件仿真路径/可行性结论；结论：F7 算力够、USB 搬运需 DMA 乒乓、RTL-SDR 覆盖上限 ~1.7GHz 需 upconverter 才能看 2.4GHz WiFi）

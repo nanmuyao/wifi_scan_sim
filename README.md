@@ -26,6 +26,7 @@ AIGC:
 | `tools/make_wpa2_handshake_pcap.py` | 生成四次握手 + CCMP 加密数据帧 pcap 样本 | 用 scapy 构造 802.11 QoS Data + LLC/SNAP + EAPOL M1/M2/M3/M4（KCK 计算真实 MIC）+ 1 帧 CCMP 加密 QoS Data（TK 加密 LLC/SNAP+IP），输出到 `tests/fixtures/wpa2_handshake.pcap` |
 | `stm32_project/` | STM32 完整工程（CubeMX .ioc + 源码） | F103C8T6 + USART1(ESP8266) + USART2(调试)，复用 ap_parser 解析库，修正逐字节接收缓冲、NUL 结尾、帧结束判定（看 OK/ERROR/FAIL 终止行）三处隐患 |
 | `tools/serial_wifi_plot.py` | 串口实时绘图脚本 | 解析 `[i] ch=.. rssi=.. enc=.. ssid=..` 输出，画信道热力图 + RSSI 时间曲线，Ctrl+C 保存 PNG |
+| `docs/Linux抓包操作指引.md` | Linux 监听模式抓包指引（阶段 3） | macOS 无 RFMON 已实测（tcpdump -I 收不到帧），指引用户在有监听模式的 Linux 机器上抓包回传，再用 `wifi_frame_parser.py` 验证；含步骤与常见问题 |
 | `docs/采购清单与接线方案.md` | 三档采购清单 + 接线图 | 经济档 ¥70 / 标准档 ¥200 / 进阶档 ¥1300（频谱版） |
 | `docs/ESP32版设计文档.md` | ESP32 版设计文档（阶段 5） | 硬件选型差异（ESP32 vs STM32+ESP8266）、软件架构（直扫→解析→聚合→WebSocket/Web Serial 仪表盘）、ESP-IDF/Wokwi/qemu 仿真路径、与阶段1-4 代码复用关系、里程碑拆分与验收标准 |
 | `docs/RTL-SDR频谱方案.md` | RTL-SDR 频谱方案可行性文档（阶段 6 · 路线B） | STM32F7 直解 vs PC 端 rtl_power vs 混合三方案对比、硬件需求与成本、数据率/FFT 瓶颈（4.8-6.4 MB/s I/Q 流 + DMA 乒乓）、软件架构建议、无硬件仿真路径（L1-L4）、可行性结论（F7 算力够、RTL-SDR 覆盖上限 ~1.7GHz 需 upconverter 才能看 2.4GHz WiFi） |
