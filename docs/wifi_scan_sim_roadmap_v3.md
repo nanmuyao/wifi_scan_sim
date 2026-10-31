@@ -284,7 +284,19 @@ wpa-eap-tls 里加密重新握手中的 G1（tshark 不跟踪）——它们只�
 还有 10 帧组播属于 FT 样例；wpa-mlo-ccmp 与 wpa3-mlo 没有解出组密钥（多链路的 GTK 在另一种 KDE 里，tshark 也没有打出），留着。
 **测试**：`tests/test_groupkeys.py` 手拼 KDE、用 `aes_key_wrap` / RC4 独立包装，并用 pycryptodome 加密组播帧；20 处变异检查，起初 7 个存活（取第一个 GTK、填充之后停读、密钥序号 / 时间 / AP 的筛选、ToDS+FromDS、组地址位），
 补用例后全部抓住——其中组地址位这一条是用例里"单播"地址 0x11 的最低位其实是 1，帮我发现了测试自己的错；唯一没抓住的是 `x.anonce == e["nonce"]`（它只是少试几个握手的优化，MIC 不对照样过不去）。
-TKIP、WEP 与 TKIP 变异体的击杀是下一小步。
+
+### TKIP（D4c-4）
+`decrypt80211.decrypt_tkip`：32 字节 TK = TEK(16) ‖ AP 发送的 Michael 密钥(8) ‖ STA 发送的 Michael 密钥(8)；组密钥同理（GTK 的 [16:24] 是 AP 的发送密钥）。
+解密 = 两阶段混合 → RC4 → ICV（CRC-32）；Michael 的输入是 DA ‖ SA ‖ 优先级 ‖ 000 ‖ MSDU，密钥看发送方向（FromDS 用 [16:24]，否则 [24:32]）；
+分片帧的 Michael 要重组后才能校验，返回 None，整体只看 ICV。`decrypt_any` 把 AEAD 与 TKIP 统一成「明文 + 完整性是否通过」，`decrypt_frame` / `decrypt_group` 都走它。
+**结果**：wpa-Induction、wpa1-gtk-rekey、wpa2-psk-ccmp-tkip 里 tshark 解出的 TKIP 帧全部逐字节相同（ICV 和 Michael 都过）；
+与 tshark 明文相同的数据帧：单播 1055 -> 1071、组播 82 -> 165。wpa1-gtk-rekey 的 3 个 WPA1 G1（在 TKIP 帧里）解开了，GTK 与 tshark 的 3 个全部相同：
+解出的组密钥 34 -> 37 个、与 tshark 相同的 GTK 12 -> 15 个。
+**遗留的 4 个 TKIP 变异体全部杀掉**，但不是靠真实样例：样例里的 TSC 都很小（高位全 0），第 1 阶段里 TSC 高两个字的顺序、`seed[1]` 的 `& 0x7F` 等改动真实帧测不出来。
+新增 `tests/oracle/test_tkip_oracle.py`：用我们的 `tkip_encrypt` 加密 27 个合成帧（TSC 高低位、TSC1 = 0x40 / 0x7F / 0xFF、随机 TEK / TA），让 tshark 用同一把 TEK（密钥类型 `tk`，16 字节）解密——tshark 的实现是独立的。
+对混合代码的 10 个改动做变异检查：全部被抓住（含起初漏掉的两个：TSC 高两个字对调、`seed[1]` 的掩码）。
+`tests/test_decrypt.py` 另用独立构造的帧测 Michael 的密钥方向、DA / SA、优先级、分片，解密模块的 9 个改动，只剩一个没抓住：ToDS 与 FromDS 同时置位（四地址）时 Michael 取哪把密钥——规范里没有明确，样例里也没有这种帧，保持现状。
+WEP 与受保护的管理帧（PMF / BIP）是下一小步。
 
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：

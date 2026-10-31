@@ -21,10 +21,11 @@ run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "差分工具（tshark 对照）" python3 tests/oracle/test_diff.py
 run "握手跟踪（MIC 算法、PTK、候选 PMK、合成握手）" python3 tests/test_handshake.py
 run "握手对照 tshark（30 个握手：MIC 自证 + KCK / TK）" python3 tests/oracle/test_handshake_oracle.py
-run "CCMP / GCMP 数据帧解密（独立加密方、AAD / nonce 的各位）" python3 tests/test_decrypt.py
-run "CCMP / GCMP 解密对照 tshark 明文（1055 帧单播 + 82 帧组播逐字节）" python3 tests/oracle/test_decrypt_diff.py
+run "CCMP / GCMP / TKIP 数据帧解密（独立加密方、AAD / nonce / Michael 的各位）" python3 tests/test_decrypt.py
+run "TKIP 密钥混合对照 tshark（27 个合成帧）" python3 tests/oracle/test_tkip_oracle.py
+run "CCMP / GCMP / TKIP 解密对照 tshark 明文（1071 帧单播 + 165 帧组播逐字节）" python3 tests/oracle/test_decrypt_diff.py
 run "组密钥（KDE、Key Data 解包、GTK / IGTK、组播帧解密）" python3 tests/test_groupkeys.py
-run "组密钥对照 tshark 的 GTK（34 个，12 个相同）" python3 tests/oracle/test_groupkeys_oracle.py
+run "组密钥对照 tshark 的 GTK（37 个，15 个相同）" python3 tests/oracle/test_groupkeys_oracle.py
 run "EAPOL-Key 解析与帧迭代" python3 tests/test_eapol.py
 run "EAPOL-Key 对照 tshark（109 帧）" python3 tests/oracle/test_eapol_diff.py
 run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test_kdf80211.py

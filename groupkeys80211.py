@@ -121,17 +121,17 @@ def group_ciphers(frames, done=()):
 
 def decrypt_group(keys, ciphers, frame):
     """用 AP 发的组密钥解一个组播 / 广播数据帧（FromDS，A1 是组地址，A2 = BSSID）。
-    按帧头里的密钥序号找 GTK，装上时间在帧之前的从新到旧试，MIC 决定。返回 (GroupKey, 明文) 或 None。目前只处理 CCMP / GCMP。"""
+    按帧头里的密钥序号找 GTK，装上时间在帧之前的从新到旧试，MIC 决定。返回 (GroupKey, 明文) 或 None。"""
     h = frame.h
     if h["type"] != 2 or not h["protected"] or not (int(h["addr1"].split(":")[0], 16) & 1) or not h["from_ds"] or h["to_ds"]:
         return None
     cipher = ciphers.get(h["addr2"])
-    if cipher not in dec.MIC_LEN or len(frame.body) < 8:
+    if cipher not in dec.SUPPORTED or len(frame.body) < 8:
         return None
     key_id = dec.pn_of(frame.body)[1]
     for gk in sorted((k for k in keys if k.ap == h["addr2"] and k.key_id == key_id and k.n < frame.n), key=lambda k: -k.n):
         try:
-            pt, ok, _pn = dec.decrypt_aead(gk.gtk, cipher, frame)
+            pt, ok = dec.decrypt_any(cipher, gk.gtk, frame)
         except ValueError:
             continue
         if ok:

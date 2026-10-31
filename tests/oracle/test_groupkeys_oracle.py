@@ -62,7 +62,7 @@ EXPECTED = {
     "wpa-test-decode-mgmt.pcap.gz": (1, 1, 0, 0, 0, 1),
     "wpa-test-decode-tdls.pcap.gz": (2, 2, 0, 0, 0, 1),
     "wpa-test-decode.pcap.gz": (1, 1, 0, 1, 0, 0),
-    "wpa1-gtk-rekey.pcapng.gz": (0, 0, 0, 0, 3, 0),
+    "wpa1-gtk-rekey.pcapng.gz": (3, 0, 3, 3, 0, 0),
     "wpa2-ft-eap.pcapng.gz": (0, 0, 0, 0, 1, 0),
     "wpa2-ft-psk.pcapng.gz": (0, 0, 0, 0, 2, 0),
     "wpa2-psk-ccmp-tkip.pcapng.gz": (1, 1, 0, 1, 0, 0),
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         else:
             print('    "%s": %s,' % (name, got))
     if EXPECTED:
-        check(sum(v[0] for v in got_all.values()) == 34 and sum(v[3] for v in got_all.values()) == 12, "共解出 %d 个组密钥，%d 个 GTK 与 tshark 相同" % (sum(v[0] for v in got_all.values()), sum(v[3] for v in got_all.values())))
+        check(sum(v[0] for v in got_all.values()) == 37 and sum(v[3] for v in got_all.values()) == 15, "共解出 %d 个组密钥，%d 个 GTK 与 tshark 相同" % (sum(v[0] for v in got_all.values()), sum(v[3] for v in got_all.values())))
         check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
         print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
         sys.exit(0 if not failures else 1)

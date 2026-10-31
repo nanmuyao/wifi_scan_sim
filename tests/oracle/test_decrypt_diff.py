@@ -32,7 +32,7 @@ def check(ok, msg):
         failures.append(msg)
 
 
-AEAD = ("CCMP", "GCMP")
+AEAD = ("CCMP", "GCMP", "TKIP")
 CATEGORIES = ("ok", "group", "mgmt", "no_hs", "stale", "ours_only")
 
 
@@ -49,7 +49,7 @@ def classify(path, keys):
         if theirs is not None and theirs["method"] not in AEAD:
             continue
         pair = {f.h["addr1"], f.h["addr2"]}
-        cand = [x for x in done if {x.ap, x.sta} == pair and x.cipher != "TKIP" and x.frames["m2"] < f.n]
+        cand = [x for x in done if {x.ap, x.sta} == pair and x.frames["m2"] < f.n]
         if f.h["type"] == 0:
             if theirs is not None:
                 out["mgmt"] += 1
@@ -78,7 +78,7 @@ EXPECTED = {
     "owe-3-dh-groups.pcapng.gz": (1, 0, 0, 0, 0, 2),
     "owe.pcapng.gz": (5, 5, 0, 0, 0, 0),
     "wep.pcapng.gz": (0, 0, 0, 0, 0, 0),
-    "wpa-Induction.pcap.gz": (203, 0, 0, 0, 0, 0),
+    "wpa-Induction.pcap.gz": (203, 73, 0, 0, 0, 0),
     "wpa-ccmp-256.pcapng.gz": (8, 6, 0, 0, 0, 0),
     "wpa-eap-tls.pcap.gz": (59, 2, 0, 0, 0, 0),
     "wpa-gcmp-256.pcapng.gz": (8, 5, 0, 0, 0, 0),
@@ -87,10 +87,10 @@ EXPECTED = {
     "wpa-test-decode-mgmt.pcap.gz": (0, 0, 3, 0, 0, 0),
     "wpa-test-decode-tdls.pcap.gz": (6, 0, 0, 2, 0, 0),
     "wpa-test-decode.pcap.gz": (716, 40, 0, 0, 0, 0),
-    "wpa1-gtk-rekey.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa1-gtk-rekey.pcapng.gz": (16, 6, 0, 0, 0, 0),
     "wpa2-ft-eap.pcapng.gz": (0, 0, 0, 4, 0, 0),
     "wpa2-ft-psk.pcapng.gz": (0, 0, 0, 17, 0, 0),
-    "wpa2-psk-ccmp-tkip.pcapng.gz": (8, 0, 0, 0, 0, 0),
+    "wpa2-psk-ccmp-tkip.pcapng.gz": (8, 4, 0, 0, 0, 0),
     "wpa2-psk-mfp.pcapng.gz": (7, 2, 0, 0, 0, 0),
     "wpa3-ft-sae-ext-key-group20.pcapng.gz": (0, 0, 0, 0, 0, 0),
     "wpa3-ft-sae-h2e.pcapng.gz": (0, 0, 0, 10, 0, 0),
@@ -110,6 +110,6 @@ if __name__ == "__main__":
         totals = [a + b for a, b in zip(totals, got)]
         check(got == EXPECTED[name], "%s：%s（表里 %s）" % (name, dict(zip(CATEGORIES, got)), dict(zip(CATEGORIES, EXPECTED[name]))))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
-    check(totals[0] == 1055 and totals[1] == 82 and totals[5] == 4, "共 %d 帧单播 + %d 帧组播与 tshark 的明文逐字节相同；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[5]))
+    check(totals[0] == 1071 and totals[1] == 165 and totals[5] == 4, "共 %d 帧单播 + %d 帧组播与 tshark 的明文逐字节相同；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[5]))
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

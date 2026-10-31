@@ -116,7 +116,7 @@ check(got is not None and got[1] == PL and got[0].n == 10, "组播帧：按密�
 check(gk.decrypt_group(keys, CI, f._replace(n=15)) is not None, "帧在第二把密钥装上（n=20）之前：只剩第一把可用")
 check(gk.decrypt_group(keys, CI, f._replace(n=10)) is None, "帧号不晚于密钥装上的帧：不用这把密钥")
 check(gk.decrypt_group(keys, {}, f) is None, "不知道组密码套件：None")
-check(gk.decrypt_group(keys, {BSSID: "TKIP"}, f) is None, "TKIP 组密钥：还没处理，None")
+check(gk.decrypt_group(keys, {BSSID: "TKIP"}, f) is None, "组套件猜成 TKIP 但 GTK 只有 16 字节：长度不对，None（不崩溃）")
 check(gk.decrypt_group([k for k in keys if k.key_id != 1], CI, f) is None, "没有这个密钥序号的 GTK：None")
 uni = frame(build("CCMP-128", TK, 99, PL, a1=bytes([0x12] * 6), qos=0x0000, to_ds=0, from_ds=1, key_id=1))._replace(n=30)
 check(gk.decrypt_group(keys, CI, uni) is None, "A1 不是组地址：不是组播帧，None")

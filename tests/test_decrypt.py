@@ -68,6 +68,65 @@ check(not dec.decrypt_aead(TK16, "CCMP-128", mutated(hl + 7, 0x01))[1], "PN5 变
 check(not dec.decrypt_aead(TK16, "CCMP-128", mutated(len(base) - 1, 0x01))[1], "MIC 末字节变了")
 check(not dec.decrypt_aead(TK16, "CCMP-128", mutated(hl + 9, 0x01))[1], "密文变了")
 
+print("== TKIP：Michael 的密钥方向、DA / SA、优先级、分片 ==")
+import struct  # noqa: E402
+import crypto80211 as c  # noqa: E402
+import frames80211 as fr  # noqa: E402
+
+TKT = bytes(range(32))
+MK_AP, MK_STA = TKT[16:24], TKT[24:32]
+BSS, STA_, DST, SRC = bytes([2, 0, 0, 0, 0, 1]), bytes([2, 0, 0, 0, 0, 2]), bytes([2, 0, 0, 0, 0, 3]), bytes([2, 0, 0, 0, 0, 4])
+MSDU = b"\xaa\xaa\x03\x00\x00\x00\x08\x00" + bytes(range(30))
+
+
+def tkip_frame(*, to_ds, qos=None, frag=0, more_frag=False, key=TKT, mic_key=None, mic_input=None, tsc=0x0000_1234_5678):
+    """独立构造：TKIP 帧。ToDS：A1 = BSSID、A2 = SA、A3 = DA；FromDS：A1 = DA、A2 = BSSID、A3 = SA。"""
+    if to_ds:
+        a1, a2, a3, da, sa = BSS, STA_, DST, DST, STA_
+    else:
+        a1, a2, a3, da, sa = DST, BSS, SRC, DST, SRC
+    mk = mic_key or (MK_STA if to_ds else MK_AP)
+    prio = (qos or 0) & 0x0F
+    mic = c.michael(mk, mic_input if mic_input is not None else da + sa + bytes([prio, 0, 0, 0]) + MSDU)
+    fc0 = 0x08 | (8 << 4 if qos is not None else 0)
+    fc1 = (0x01 if to_ds else 0x02) | 0x40 | (0x04 if more_frag else 0)
+    hdr = bytes([fc0, fc1, 0, 0]) + a1 + a2 + a3 + struct.pack("<H", 0x0100 << 4 & 0xFFF0 | frag)
+    if qos is not None:
+        hdr += struct.pack("<H", qos)
+    d = hdr + c.tkip_encrypt(key[:16], a2, tsc, 0, MSDU + mic)
+    return fr.Frame(1, 0.0, d, w.parse_mac_header(d), d[len(hdr):], None)
+
+
+for to_ds in (True, False):
+    f = tkip_frame(to_ds=to_ds, qos=0x0003)
+    msdu, icv, mic, tsc = dec.decrypt_tkip(TKT, f)
+    check(msdu == MSDU and icv and mic is True and tsc == 0x12345678, "%s：MSDU 还原、ICV 和 Michael 通过、TSC" % ("ToDS（STA 发出）用 tk[24:32]" if to_ds else "FromDS（AP 发出）用 tk[16:24]"))
+    check(dec.decrypt_any("TKIP", TKT, f) == (MSDU, True), "decrypt_any 把 TKIP 当整体判断")
+    check(dec.decrypt_tkip(TKT, tkip_frame(to_ds=to_ds, qos=0x0003, mic_key=MK_AP if to_ds else MK_STA))[2] is False, "Michael 密钥方向反了：失败")
+check(dec.decrypt_tkip(TKT, tkip_frame(to_ds=True, qos=0x0005))[2] is True and dec.decrypt_tkip(TKT, tkip_frame(to_ds=True))[2] is True, "优先级取 QoS 的 TID；非 QoS 为 0")
+bad_prio = tkip_frame(to_ds=True, qos=0x0005, mic_input=DST + STA_ + bytes([0, 0, 0, 0]) + MSDU)
+check(dec.decrypt_tkip(TKT, bad_prio)[2] is False, "Michael 输入里的优先级不是 TID：失败")
+swapped = tkip_frame(to_ds=False, qos=0x0000, mic_input=SRC + DST + bytes(4) + MSDU)
+check(dec.decrypt_tkip(TKT, swapped)[2] is False, "DA 和 SA 颠倒：失败")
+frag = tkip_frame(to_ds=True, qos=0x0000, more_frag=True, mic_key=bytes(8))
+check(dec.decrypt_tkip(TKT, frag)[2] is None and dec.decrypt_any("TKIP", TKT, frag)[1], "分片帧：Michael 要重组后才能校验，返回 None，整体只看 ICV")
+check(dec.decrypt_tkip(TKT, tkip_frame(to_ds=True, qos=0x0000, frag=2, mic_key=bytes(8)))[2] is None, "分片号非 0 的帧同样不校验 Michael")
+ok_f = tkip_frame(to_ds=True, qos=0x0000)
+wrong = dec.decrypt_tkip(bytes(range(1, 33)), ok_f)
+check(not wrong[1] and dec.decrypt_any("TKIP", bytes(range(1, 33)), ok_f)[1] is False, "错的 TEK：ICV 不通过")
+check(dec.decrypt_any("TKIP", TKT[:16] + bytes(16), ok_f)[1] is False, "TEK 对但 Michael 密钥错：整体失败")
+for bad_len in (16, 31, 33):
+    try:
+        dec.decrypt_any("TKIP", bytes(bad_len), ok_f)
+        check(False, "TKIP 密钥 %d 字节应当报错" % bad_len)
+    except ValueError:
+        check(True, "TKIP 密钥 %d 字节：ValueError" % bad_len)
+try:
+    dec.decrypt_any("TKIP", TKT, fr.Frame(1, 0.0, ok_f.dot11[:30] + bytes(10), ok_f.h, bytes(10), None))
+    check(False, "帧体太短应当报错")
+except ValueError:
+    check(True, "帧体太短：ValueError")
+
 print("== pn_of ==")
 check(dec.pn_of(bytes([1, 2, 0, 0x20, 3, 4, 5, 6])) == (0x060504030201, 0, True), "PN0 PN1 在前、PN2-PN5 在后，ExtIV 位")
 check(dec.pn_of(bytes([0, 0, 0, 0xE0, 0, 0, 0, 0]))[1] == 3, "密钥序号取最高 2 位")

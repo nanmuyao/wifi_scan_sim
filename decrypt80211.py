@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-802.11 数据帧解密（先做 CCMP / GCMP 的单播数据帧；TKIP、WEP、组播、管理帧后续逐个加）。纯标准库。
+802.11 数据帧解密：CCMP / GCMP / TKIP（单播与组播；WEP、受保护的管理帧后续加）。纯标准库。
 
 CCMP / GCMP 帧体 = 8 字节头 ‖ 密文 ‖ MIC（CCMP-128 8 字节，CCMP-256 与 GCMP 16 字节）
   头：PN0 PN1 保留 (ExtIV | 密钥序号<<6) PN2 PN3 PN4 PN5
@@ -59,18 +59,51 @@ def decrypt_aead(tk, cipher, frame):
     return pt, ok, pn
 
 
+def decrypt_tkip(tk, frame, michael_key=None):
+    """解一个 TKIP 帧（密钥 32 字节：TEK 16 ‖ AP 发送的 Michael 密钥 8 ‖ STA 发送的 Michael 密钥 8）。
+    返回 (MSDU, ICV 是否通过, Michael 是否通过 / 分片帧没法校验为 None, TSC)；MSDU 从 LLC 开始，已去掉 Michael MIC 和 ICV。
+    Michael 的密钥由发送方决定：FromDS（AP 发出）用 tk[16:24]，否则 tk[24:32]；输入是 DA ‖ SA ‖ 优先级 ‖ 000 ‖ MSDU。"""
+    h = frame.h
+    if len(tk) != 32:
+        raise ValueError("TKIP 密钥必须是 32 字节")
+    data, tsc, icv_ok = c.tkip_decrypt(tk[:16], _mac(h["addr2"]), frame.body)
+    if len(data) < 8:
+        return data, icv_ok, False, tsc
+    msdu, mic = data[:-8], data[-8:]
+    if h["more_frag"] or h["frag_num"]:
+        return msdu, icv_ok, None, tsc
+    key = michael_key or (tk[16:24] if h["from_ds"] and not h["to_ds"] else tk[24:32])
+    prio = h["qos"]["tid"] if h["qos"] is not None else 0
+    m_ok = c.michael(key, c.tkip_michael_input(_mac(h["da"]), _mac(h["sa"]), prio, msdu)) == mic
+    return msdu, icv_ok, m_ok, tsc
+
+
+def decrypt_any(cipher, key, frame):
+    """按套件解一个帧：返回 (明文, 完整性是否通过)。AEAD 看 MIC；TKIP 要 ICV 和 Michael 都过（分片帧只看 ICV）。"""
+    if cipher == "TKIP":
+        if len(frame.body) < 8 + 4 + 8:
+            raise ValueError("帧体太短")
+        msdu, icv_ok, m_ok, _tsc = decrypt_tkip(key, frame)
+        return msdu, icv_ok and m_ok is not False
+    pt, ok, _pn = decrypt_aead(key, cipher, frame)
+    return pt, ok
+
+
+SUPPORTED = tuple(MIC_LEN) + ("TKIP",)
+
+
 def decrypt_frame(handshakes, frame):
     """在已推出的握手里找能解开这一帧的 PTK：同一对地址、M2 在这一帧之前的握手，从新到旧逐个试（重新握手之后到新密钥
     装上之前的帧、Extended Key ID 下新旧两把密钥同时有效，都要靠 MIC 来分辨）。返回 (握手, 明文) 或 None。
-    目前只处理 CCMP / GCMP 的单播数据帧。"""
+    CCMP / GCMP / TKIP 的单播数据帧。"""
     h = frame.h
     if h["type"] != 2 or not h["protected"]:
         return None
     pair = {h["addr1"], h["addr2"]}
-    for hs in sorted((x for x in handshakes if {x.ap, x.sta} == pair and x.frames["m2"] < frame.n and x.cipher in MIC_LEN),
+    for hs in sorted((x for x in handshakes if {x.ap, x.sta} == pair and x.frames["m2"] < frame.n and x.cipher in SUPPORTED),
                      key=lambda x: -x.frames["m2"]):
         try:
-            pt, ok, _pn = decrypt_aead(hs.tk, hs.cipher, frame)
+            pt, ok = decrypt_any(hs.cipher, hs.tk, frame)
         except ValueError:
             continue
         if ok:
