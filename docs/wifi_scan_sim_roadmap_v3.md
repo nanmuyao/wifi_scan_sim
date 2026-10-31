@@ -191,6 +191,19 @@ Multi-Link 的类型、公共信息长度、MLD MAC、链路 ID、站点配置�
   厂商元素(221：WPA、WMM、WPS 等) → FT / 移动域(54/55)、RSNXE(244) → 扩展元素：HE(35/36)、Multi-Link(107)、EHT(106/108)、OWE DH 参数(32)、AKM Suite Selector(114)、Rejected Groups(92)。
 - 验收：tshark 解出的每个 `wlan.tag.*` / `wlan.ext_tag.*` 字段，我们都有对应值；基线“4/23”变成“23/23”，扩展“0/8”变成“8/8”。
 
+### 阶段 D 的标准答案与基线（D1）
+`tests/oracle/decrypt_oracle.py`：让 tshark 用 Wireshark 测试套件公开的密钥表（口令、WEP 密钥、PMK、msk）解密，从 `tshark -x` 输出里取出它解出来的明文
+（每个解出的帧是一个单独的「Decrypted … data」数据源）。我们之后实现的解密，逐帧、逐字节与它对照。
+**基线**：tshark 在 20 个样例上共解出 **1286 帧**明文——CCMP、TKIP、WEP、GCMP 四种；4 个样例它解不出
+（`wpa-mlo-ccmp`、`wpa3-mlo`、`wpa3-ft-sae-ext-key-group20`、`wpa3-sae-ext-key-group21`：要 64 字节 PMK 或 tshark 4.4 没有的功能）；另有部分解出的：`wpa3-ft-sae-h2e` 16 帧里 10 帧，`wpa-test-decode` 936 帧里 756 帧，`wpa-Induction` 280 帧里 276 帧，`owe-3-dh-groups` 3 帧里 1 帧。
+精确的每个样例的帧数钉在 `test_decrypt_oracle.py` 里（tshark 版本变了会显形）。
+**我们自己的解密目前只有 CCMP-128（`wpa2_handshake.py`）**，而且只认 3 地址帧、不剥 FCS。
+**踩到的坑**：
+- 样例的密钥表里有两把 64 字节的 `wpa-psk`，Debian 的 tshark 4.4 加载不了——**一把这样的密钥会让整张表都加载失败**（所有样例变成 0 帧）；工具把它们去掉，依赖它们的样例没有标准答案。
+- tshark 的行内选项 `-o uat:80211_keys:…` 的解析器也拒绝这种长度，所以密钥表写进临时的 Wireshark 配置目录（`XDG_CONFIG_HOME`）。
+- `tshark -x` 对只有一个数据源的帧不打标题，不能按标题分帧，要按空行分块。
+- `wpa-Induction` 是 WPA/WPA2 混合模式：单播 CCMP（203 帧），组播 TKIP（73 帧）。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
