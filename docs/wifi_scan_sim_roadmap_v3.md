@@ -1,0 +1,123 @@
+# wifi_scan_sim 路线图 v3：向完整 802.11 协议支持推进
+
+> 承接 [v2](wifi_scan_sim_roadmap_v2.md)。v2 以"买硬件、联调"为主线；v3 的目标不同：
+> **在软件里尽量完整地支持 802.11 协议（帧、信息元素、加密、密钥协商），并且每一项都有可对照的标准答案。**
+> 项目底线不变：学习研究用途；只处理自建网络和公开样例；不抓、不解他人流量；不做口令爆破。
+
+## 0. 先说结论
+
+1. **协议完整度是软件问题，不是硬件问题。** 现有的 STM32+ESP8266 只能"列出附近的 WiFi"（`AT+CWLAP`），
+   看不到原始帧，所以买再多这类板子也不会让协议支持更完整。
+   公开样例抓包已经覆盖了几乎所有现代协议特性，整条路线不需要买任何东西。
+2. **“完整”要有尺子。** 用 Wireshark 的命令行工具 tshark 当标准答案，逐帧、逐字段对比；
+   加密部分用 Wireshark 测试套件里公开的期望密钥（TK/GTK）对比。没有对照的“支持”不算支持。
+3. v2 里排 P0 的“硬件联调”建议降级为可选项（见第 5 节）。
+
+## 1. 现状基线（实测）
+
+测量方法：下载 Wireshark 仓库 `test/captures/` 里与 802.11 / WPA 相关的 24 个公开抓包，
+用 tshark 4.4.19（Debian 13 的软件包）统计里面实际出现的内容，再对照 `wifi_frame_parser.py` 的源码。
+
+| 项目 | 样例里出现的 | 现有解析器处理的 |
+|---|---|---|
+| 信息元素（tag） | 23 种：0 1 3 5 7 16 42 45 47 48 50 54 55 59 61 76 90 114 127 201 221 225 244 | **4 种**：0 1 3 50（SSID、速率、信道） |
+| 扩展信息元素（tag 255） | 8 种（tshark 命名）：HE Capabilities(35)、HE Operation(36)、EHT Capabilities(108)、EHT Operation(106)、Multi-Link(107)、OWE DH 参数(32)、AKM Suite Selector(114)、Rejected Groups(92) | **0 种** |
+| 帧子类型 | 17 种：Beacon、QoS Data、Data、QoS Null、Probe Req/Resp、Auth、Assoc Req/Resp、Deauth、Disassoc、Action、ACK、CTS 等 | 管理帧/控制帧/数据帧主要类型已有，细节未逐帧对照过 |
+| 加密套件 | WEP、TKIP、CCMP、CCMP-256、GCMP、GCMP-256、BIP（保护管理帧） | 仅 CCMP-128 |
+| 认证与密钥管理 | PSK、FT-PSK/FT-EAP、EAP、SAE（WPA3）、SAE-EXT-KEY、OWE、Suite-B 192 | 仅 PSK + WPA2 四次握手 |
+| radiotap | 多种 present 位组合；Wi-Fi 7 样例有多个 present 字 | 只会跳过头部，不解析字段 |
+
+这些数字是后面验收的起点：每个阶段结束时重新跑一次，数字只能往好的方向动。
+
+## 2. 验证方法（贯穿所有阶段）
+
+- **标准答案**：tshark 4.4.19，放进 Docker 镜像（Debian 13 软件包，固定版本）。
+- **样例**：24 个公开抓包，下载脚本固定到 Wireshark 仓库的某个提交并校验 sha256。
+  **不放进本仓库**：Wireshark 源码树是 GPL，本项目是 MIT，下载使用不影响许可，直接收录会。
+- **差分测试**：同一个抓包，我们的解析结果与 tshark 的字段输出逐帧对比，报告“一致 / 不一致 / 我们没解析”三类数量。
+- **解密对照**：Wireshark 的 `test/suite_decryption.py` 里给出了每个样例应当推导出的 TK / GTK 值（例如 `wpa3-sae` 的 TK 是 `20a2e28f…`）；我们推导出的值必须相同。每个样例的口令或密钥从哪里来（口令写在测试里，还是随抓包携带；SAE / OWE 的测试没有传口令，可能是后者），在阶段 A 里逐个确认并记录，这一点本次规划时没有验证。
+- **变异检查**：每个新测试，故意改坏实现一处，确认测试会变红（沿用上一轮的做法）。
+
+## 3. 阶段
+
+按“能让多少样例通过”和依赖关系排序；串行做，每个阶段单独验收、单独提交。
+
+### 阶段 A：验证底座
+- 交付：带 tshark 的 Docker 镜像、样例下载脚本（固定提交 + sha256）、差分测试工具、基线报告（第 1 节表格自动生成）。
+- 验收：一条命令生成覆盖率报告；对现有解析器给出基线数字。
+
+### 阶段 B：帧层完整
+- 内容：radiotap 全字段（TSFT、速率、信道、信号、MCS/VHT/HE 等，含多个 present 字）；
+  MAC 头所有变体（4 地址、QoS 控制、HT 控制、分片、顺序位）；全部管理 / 控制 / 数据子类型；Action 帧各类别；A-MSDU。
+- 顺带：把单个 31KB 的 `wifi_frame_parser.py` 拆成包（`wifi80211/`：radiotap、frame、ie、action、crypto、handshake），命令行入口保持不变。
+- 验收：24 个样例里每一帧的类型 / 子类型 / 地址 / 序号与 tshark 100% 一致。
+
+### 阶段 C：信息元素
+- 做法：表驱动（一张注册表，每个元素一个解码函数），未知元素原样保留而不是丢掉。
+- 顺序（按样例里出现的频次）：RSN(48) → HT(45/61) → ERP(42/47)、TIM(5)、Country(7)、扩展能力(127) →
+  厂商元素(221：WPA、WMM、WPS 等) → FT / 移动域(54/55)、RSNXE(244) → 扩展元素：HE(35/36)、Multi-Link(107)、EHT(106/108)、OWE DH 参数(32)、AKM Suite Selector(114)、Rejected Groups(92)。
+- 验收：tshark 解出的每个 `wlan.tag.*` / `wlan.ext_tag.*` 字段，我们都有对应值；基线“4/23”变成“23/23”，扩展“0/8”变成“8/8”。
+
+### 阶段 D：加密与密钥层（逐个套件）
+按样例数量和难度排：
+1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
+2. 数据面：TKIP（Michael + 密钥混合）、WEP（RC4 + CRC）、CCMP-256、GCMP-128 / 256。
+3. 管理帧保护（PMF）：BIP-CMAC / GMAC，以及 IGTK。
+- 验收：对应样例（`wpa2-psk-ccmp-tkip`、`wep`、`wpa-ccmp-256`、`wpa-gcmp*`、`wpa2-psk-mfp`、`wpa1-gtk-rekey`）能推导出与测试套件一致的 TK / GTK，并解出明文。
+
+### 阶段 E：WPA3 / OWE / FT
+- SAE：“hunting-and-pecking”与 H2E 两种方式，椭圆曲线组 19 / 20 / 21，commit / confirm 帧解析，PMK 推导。
+- OWE：椭圆曲线 Diffie-Hellman。FT：PMK-R0 / PMK-R1 密钥层级。Suite-B 192。
+- 这一阶段密码学最重，椭圆曲线先用 Python 整数手写（学习为目的，不求速度），并与 pycryptodome 的结果交叉验证。
+- 验收：`wpa3-sae`、`wpa3-sae-ext-key-group21`、`wpa3-ft-sae-h2e`、`owe*`、`wpa2-ft-*`、`wpa3-suiteb-192` 推导的 TK / GTK 与测试套件一致。
+
+### 阶段 F：解密之后的内容
+- 解密后只做到能验证“解对了”：LLC/SNAP → ARP / IPv4 / IPv6 / UDP / DHCP 的最小解析。
+  Wireshark 的测试用 “Who has 192.168.5.18”（ARP）和 “DHCP ACK” 断言解密成功，我们断言同样的内容。
+- 不做 TLS 等更上层的内容。
+
+### 阶段 G（可选）：Wi-Fi 7 与其他
+- MLO（Multi-Link）：`wpa-mlo-ccmp`、`wpa3-mlo`；TDLS（`wpa-test-decode-tdls`）；Mesh 元素；Extended Key ID（`wpa_ptk_extended_key_id`）。
+
+## 4. 完成度矩阵（每阶段结束更新）
+
+| 协议能力 | 阶段 | 对照样例 | 状态 |
+|---|---|---|---|
+| 帧层逐帧与 tshark 一致 | B | 全部 24 个 | 待做 |
+| 信息元素 23/23 + 扩展 8/8 | C | 全部 24 个 | 待做（现 4/23、0/8） |
+| WPA2-PSK / CCMP-128 | 已有 | `wpa-Induction`、`wpa-test-decode` | 已有（待用公开样例复验，属阶段 A） |
+| TKIP、WEP | D | `wpa2-psk-ccmp-tkip`、`wep` | 待做 |
+| CCMP-256、GCMP | D | `wpa-ccmp-256`、`wpa-gcmp*` | 待做 |
+| PMF（BIP） | D | `wpa2-psk-mfp` | 待做 |
+| WPA3-SAE | E | `wpa3-sae*` | 待做 |
+| OWE | E | `owe*` | 待做 |
+| FT（802.11r） | E | `wpa2-ft-*`、`wpa3-ft-*` | 待做 |
+| Suite-B 192 | E | `wpa3-suiteb-192` | 待做 |
+| MLO / TDLS / Mesh | G | 对应样例 | 可选 |
+
+## 5. 硬件怎么看（给不熟悉硬件的读者）
+
+- **STM32 + ESP8266（v2 阶段 7）**：只能“列出附近的 WiFi”，看不到原始帧。对“完整协议”没有帮助，
+  只能验证“串口 + 解析”这条小链路，而这条链路仿真测试已经覆盖。建议降为可选。
+- **ESP32（v2 阶段 9）**：有混杂模式，能收到原始 802.11 帧，价格便宜，可以把收到的帧送给上面的解析器。
+  限制：普通 ESP32 只有 2.4GHz，看不到 5GHz / 6GHz 的帧。适合做“真实帧进来”的演示，不是协议完整度的前提。
+- **电脑 + 支持监听模式的 USB 网卡（Linux）**：才是抓真实 5GHz / WPA3 帧的办法，仅限自建网络。
+  可以等阶段 D / E 做完后再决定要不要买，那时候再按实际需要选型。
+- 结论：阶段 A–F 完全不用硬件。硬件放到阶段 G 之后，并且只在需要“真实帧”时再买。
+
+## 6. 范围与边界
+
+- 解密和密钥推导只用于：已知口令的自建网络，或公开样例里已公开的密钥。**不实现口令爆破**；
+  PMKID 只用来校验“已知口令是否正确”，不做离线猜测。
+- 不追求速度：Python 参考实现，以可读、可对照为先。需要上 MCU 的部分（帧头、基础元素）以后再单独移植成 C。
+- 不收录第三方抓包文件（GPL），只收录下载脚本与校验值。
+
+## 7. 与 v2 的关系
+
+| v2 阶段 | v3 处理 |
+|---|---|
+| 7 硬件联调（STM32+ESP8266） | 降为可选，放在阶段 G 之后 |
+| 8 真实抓包 + 解密实操 | 阶段 A 先用公开样例复验；自建网络抓包放在阶段 D / E 之后 |
+| 9 ESP32 实现 | 保留，作为“真实帧输入”，在阶段 C 之后再做才有价值 |
+| 10 可视化 | 不变，价值随解析完整度提升 |
+| 11 SDR 频谱 | 与协议完整度无关，维持 P2 |
