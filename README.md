@@ -17,10 +17,13 @@ AIGC:
 
 | 文件 | 角色 | 说明 |
 |------|------|------|
-| `esp8266_sim.py` | ESP8266 AT 固件模拟器 | 用 pty 创建虚拟串口，预置 8 个虚拟 AP，响应 AT / AT+CWMODE / AT+CWLAP |
+| `esp8266_sim.py` | ESP8266 AT 固件模拟器 | 用 pty 创建虚拟串口，预置 8 个虚拟 AP，响应 AT / AT+CWMODE / AT+CWLAP；阶段 2 扩展：AT+CWSNIFF 开关 promiscuous 嗅探，按间隔主动推送预置的 Probe Request 报告（SSID/MAC/RSSI），支持 `--sniffer-demo` 一键演示 |
 | `ap_parser.c` / `ap_parser.h` | CWLAP 解析库（纯 C） | STM32 核心解析逻辑，无 HAL 依赖，PC 可直接编译测试 |
 | `test_ap_parser.c` | 解析器单元测试 | 7 组用例：正常多 AP / 隐藏 SSID / 转义字符 / 空响应 / 干扰行 / 非法参数 / AT 响应收尾判定 |
 | `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；可读 pcap 文件逐帧解析 |
+| `wpa2_handshake.py` | WPA2 密钥推导 + EAPOL 四次握手解析（纯手写，阶段 4） | `--pmk`：PBKDF2-HMAC-SHA1 推导 PMK（含 802.11i 标准向量校验）；`--pcap`：从 pcap 提取 EAPOL-Key，区分握手 1/4~4/4，输出 ANonce/SNonce/MIC/Key Info |
+| `tests/test_wpa2_handshake.py` | 阶段 4 单元测试 | PMK 标准向量（password/IEEE）+ M1~M4 手工构造帧 + pcap 全链路，纯 Python 标准库运行 |
+| `tools/make_wpa2_handshake_pcap.py` | 生成四次握手 pcap 样本 | 用 scapy 构造 802.11 QoS Data + LLC/SNAP + EAPOL M1/M2/M3/M4，输出到 `tests/fixtures/wpa2_handshake.pcap` |
 | `stm32_project/` | STM32 完整工程（CubeMX .ioc + 源码） | F103C8T6 + USART1(ESP8266) + USART2(调试)，复用 ap_parser 解析库，修正逐字节接收缓冲、NUL 结尾、帧结束判定（看 OK/ERROR/FAIL 终止行）三处隐患 |
 | `tools/serial_wifi_plot.py` | 串口实时绘图脚本 | 解析 `[i] ch=.. rssi=.. enc=.. ssid=..` 输出，画信道热力图 + RSSI 时间曲线，Ctrl+C 保存 PNG |
 | `docs/采购清单与接线方案.md` | 三档采购清单 + 接线图 | 经济档 ¥70 / 标准档 ¥200 / 进阶档 ¥1300（频谱版） |
@@ -75,6 +78,23 @@ python3 esp8266_sim.py --manual
 （如 `/dev/ttys007`，波特率无关，pty 无真实波特率），发送 `AT`、`AT+CWMODE=1`、
 `AT+CWLAP` 观察响应。
 
+### 3b. 嗅探演示：promiscuous 模式抓 Probe Request（阶段 2）
+
+```bash
+python3 esp8266_sim.py --sniffer-demo
+```
+
+仿真真实 ESP8266 promiscuous 嗅探：`AT+CWSNIFF=1` 开启后模拟器**主动上报**（非查询式）
+Probe Request 报告，格式对齐 kalanda/esp8266-sniffer：
+
+```
++SNIFF:PROBE,"<SSID>",<STA MAC>,<RSSI>
+```
+
+- 6 条预置虚拟 Probe：含定向探测（目标 SSID）与广播探测（空 SSID，显示 `<broadcast>`）
+- 演示流程：开嗅探 → 自动收集 6 条报告 → 关嗅探 → 打印汇总
+- 手动模式下也可用串口工具发 `AT+CWSNIFF=1` / `AT+CWSNIFF=0` 交互观察
+
 ### 4. 802.11 数据包解析（pcap）
 
 ```bash
@@ -102,6 +122,31 @@ python3 wifi_frame_parser.py --pcap capture.pcap
 - 控制帧短帧解析：RTS / CTS / ACK / PS-Poll（RA/TA）
 - 数据帧：解析 MAC 头，WPA2 加密帧标记密文状态（无密钥不解 payload），开放网络明文可读
 - 链路层：Radiotap (127) / 802.11 (105) / Ethernet (1)；pcap 微秒/纳秒与大小端 magic
+
+### 5. WPA2 密钥推导与 EAPOL 四次握手解析（阶段 4）
+
+```bash
+# 4.1.1 PMK 推导（PBKDF2-HMAC-SHA1，含 802.11i 标准向量校验）
+python3 wpa2_handshake.py --pmk --password password --ssid IEEE
+# 输出：PMK = f42c6fc5...12e，一致 = True（标准向量）
+
+# 4.1.2 EAPOL 握手解析（测试样本为自建实验网络的模拟握手，仅用于研究学习）
+python3 wpa2_handshake.py --pcap tests/fixtures/wpa2_handshake.pcap
+# 输出 4 帧：握手 1/4 (M1 AP→STA) / 2/4 (M2 STA→AP) / 3/4 (M3 AP→STA) / 4/4 (M4 STA→AP)
+# 每帧含 Key Info 位分解、replay counter、ANonce/SNonce、MIC、Key Data 状态
+
+# 重新生成测试样本（scapy 构造 M1~M4）
+python3 tools/make_wpa2_handshake_pcap.py
+
+# 单元测试（纯标准库，无需 scapy）
+python3 tests/test_wpa2_handshake.py
+```
+
+阶段 4 说明：
+- PMK 推导仅用 `hashlib.pbkdf2_hmac`（标准库），无第三方依赖；
+- EAPOL 解析从 802.11 数据帧的 LLC/SNAP（EtherType 0x888e）提取 EAPOL-Key，
+  依据 Key Info 的 ACK/Secure 位与 Nonce/MIC 状态区分 M1~M4；
+- 合法边界：仅用于已知口令 / 自建网络研究学习，不做口令爆破。
 
 ## 仿真 vs 真实硬件的差异（务必知晓）
 

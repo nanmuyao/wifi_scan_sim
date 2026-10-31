@@ -59,10 +59,10 @@ GitHub 上无全栈完全一致的同类项目（STM32+AT 扫描+802.11 帧解�
 | 步骤 | 内容 | 验收 |
 |---|---|---|
 | 4.1.1 PMK | `PBKDF2-HMAC-SHA1(口令, SSID, 4096 次, 32 字节)` | 对上 802.11i 附录标准向量：口令 `password`、SSID `IEEE` → `f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e`（已用标准库 `hashlib.pbkdf2_hmac` 核对一致） |
-| 4.1.2 EAPOL 解析 | 从数据帧里取 LLC/SNAP（EtherType `0x888E`）后的 EAPOL-Key，区分握手 1–4 条，取出 ANonce、SNonce、MIC、Key Info | 一份抓包里能识别出完整的 4 条，并给出 AP/STA 的 MAC |
-| 4.1.3 PTK | 用 PRF 展开：`PRF-512(PMK, "Pairwise key expansion", min(MAC)‖max(MAC)‖min(Nonce)‖max(Nonce))`，拆出 KCK/KEK/TK | 有标准向量时对向量；没有时靠 4.1.4 间接验证 |
-| 4.1.4 MIC 校验 | 把握手 2（或 3）的 MIC 字段清零，用 KCK 做 HMAC-SHA1 取前 16 字节，与帧内 MIC 比较 | 口令正确 → MIC 一致；故意改错一位口令 → 必须不一致。这是整条密钥链是否正确的**唯一可靠判据**，务必加反向用例 |
-| 4.1.5 CCMP 解密 | AES-128-CCM：nonce = 优先级‖A2‖PN，AAD 由 MAC 头按规则屏蔽可变位得到，TK 解 payload，校验 8 字节 MIC | 解出的 payload 前 8 字节是 LLC/SNAP（`AA AA 03 00 00 00`），再接 IP 头；解不出 → 先排查 AAD 屏蔽位与 PN 字节序 |
+| 4.1.2 EAPOL 解析 | 从数据帧里取 LLC/SNAP（EtherType `0x888E`）后的 EAPOL-Key，区分握手 1–4 条，取出 ANonce、SNonce、MIC、Key Info。握手 1–4 条区分特征：M1 ANonce 非零、SNonce 零、MIC 零；M2 SNonce 非零、MIC 非零；M3 ANonce 非零、MIC 非零、含 GTK；M4 双 nonce 零、仅 MIC | 一份抓包里能识别出完整的 4 条，并给出 AP/STA 的 MAC |
+| 4.1.3 PTK | 用 PRF 展开：`PRF-512(PMK, "Pairwise key expansion", min(MAC)‖max(MAC)‖min(Nonce)‖max(Nonce))`，拆出 KCK/KEK/TK。注意：PTK 没有独立判据，正确性完全依赖 4.1.4 的 MIC 校验间接验证 | 有标准向量时对向量；没有时靠 4.1.4 间接验证 |
+| 4.1.4 MIC 校验 | 把握手 2（或 3）的 MIC 字段清零，用 KCK 做 HMAC-SHA1 取前 16 字节，与帧内 MIC 比较。前置条件：先解析 Key Info 确认 Key Descriptor Version = 2（AES/CCMP）才用 HMAC-SHA1；TKIP（版本 1）用 HMAC-MD5，本阶段只支持 AES，遇到版本 1 直接跳过 | 口令正确 → MIC 一致；故意改错一位口令 → 必须不一致。这是整条密钥链是否正确的**唯一可靠判据**，务必加反向用例 |
+| 4.1.5 CCMP 解密 | AES-128-CCM：nonce = 优先级‖A2‖PN（共 13 字节），AAD 由 MAC 头按规则屏蔽可变位得到，TK 解 payload，校验 8 字节 MIC。注意 LLC/SNAP 偏移随 QoS 位变化：QoS 帧在地址 4 之后多 2 字节 QoS Control，定位 EAPOL/LLC 时要同步偏移 | 解出的 payload 前 8 字节是 LLC/SNAP（`AA AA 03 00 00 00`），再接 IP 头；解不出 → 先排查 AAD 屏蔽位与 PN 字节序 |
 
 **取舍：AES 要不要引入依赖**
 - 4.1.1–4.1.4 只用标准库（`hashlib`/`hmac`/`struct`），保持项目"纯手写、少依赖"的风格；
