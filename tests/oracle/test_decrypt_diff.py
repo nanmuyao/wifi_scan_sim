@@ -6,7 +6,7 @@
   group      组播 / 广播：用 M3 / G1 里解出的 GTK，MIC 通过、明文与 tshark 相同
   mgmt       受保护的单播管理帧（PMF）：同样的 MIC + 明文相同
   wep        WEP（数据帧和共享密钥认证的第 3 帧）：ICV 通过、明文相同
-  no_hs      找不到适用的密钥（FT、TDLS 对端直连、TKIP 之类还没处理的）
+  no_hs      找不到适用的密钥（现在样例里已经没有）
   stale      有握手但解不开
   ours_only  tshark 没解出、我们 MIC 通过（应为 0：多出来的要弄清是怎么回事）
 """
@@ -22,6 +22,8 @@ import decrypt_oracle as d  # noqa: E402
 import fetch_samples  # noqa: E402
 import frames80211 as fr  # noqa: E402
 import groupkeys80211 as gk  # noqa: E402
+import pipeline80211 as pl  # noqa: E402
+import tdls80211 as td  # noqa: E402
 import handshake80211 as hs  # noqa: E402
 
 failures = []
@@ -42,6 +44,8 @@ def classify(path, keys):
     done, _ = hs.track(frames, keys)
     gkeys, gciph = gk.track_group(frames, done), gk.group_ciphers(frames, done)
     wkeys = dec.wep_keys(keys)
+    res_ = pl.decrypt_capture(frames, keys)
+    tkeys = td.track({n: v["msdus"] for n, v in res_.items() if v["how"] != "tdls"})        # TDLS 对端直连的 TPK
     mld = hs.mld_addresses(frames)
     ts = d.tshark_plain(path, keys)
     out = collections.Counter()
@@ -61,7 +65,10 @@ def classify(path, keys):
         pair = {mld.get(f.h["addr1"], f.h["addr1"]), mld.get(f.h["addr2"], f.h["addr2"])}
         if not [x for x in done if {x.ap, x.sta} == pair and x.frames["m2"] < f.n]:
             g = gk.decrypt_group(gkeys, gciph, f)
-            if g is not None and theirs is not None and g[1] == theirs["plain"]:
+            tdl = td.decrypt_frame(tkeys, f)
+            if tdl is not None and theirs is not None and tdl[1] == theirs["plain"]:
+                out["ok"] += 1                  # TDLS 对端直连：用 TPK-TK 解，当作单播
+            elif g is not None and theirs is not None and g[1] == theirs["plain"]:
                 out["group"] += 1
             elif theirs is not None:
                 out["no_hs"] += 1
@@ -90,7 +97,7 @@ EXPECTED = {
     "wpa-gcmp.pcapng.gz": (9, 6, 0, 0, 0, 0, 0),
     "wpa-mlo-ccmp.pcapng.gz": (0, 0, 0, 0, 0, 0, 0),
     "wpa-test-decode-mgmt.pcap.gz": (0, 0, 3, 0, 0, 0, 0),
-    "wpa-test-decode-tdls.pcap.gz": (6, 0, 0, 0, 2, 0, 0),
+    "wpa-test-decode-tdls.pcap.gz": (8, 0, 0, 0, 0, 0, 0),
     "wpa-test-decode.pcap.gz": (716, 40, 0, 0, 0, 0, 0),
     "wpa1-gtk-rekey.pcapng.gz": (16, 6, 0, 0, 0, 0, 0),
     "wpa2-ft-eap.pcapng.gz": (3, 1, 0, 0, 0, 0, 0),
@@ -115,6 +122,6 @@ if __name__ == "__main__":
         totals = [a + b for a, b in zip(totals, got)]
         check(got == EXPECTED[name], "%s：%s（表里 %s）" % (name, dict(zip(CATEGORIES, got)), dict(zip(CATEGORIES, EXPECTED[name]))))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
-    check(totals[0] == 1092 and totals[1] == 175 and totals[2] == 6 and totals[3] == 11 and totals[5] == 0 and totals[6] == 22, "与 tshark 明文逐字节相同：单播 %d 帧、组播 %d 帧、受保护管理帧 %d 帧、WEP %d 帧；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[2], totals[3], totals[6]))
+    check(totals[0] == 1094 and totals[1] == 175 and totals[2] == 6 and totals[3] == 11 and totals[5] == 0 and totals[6] == 22, "与 tshark 明文逐字节相同：单播 %d 帧、组播 %d 帧、受保护管理帧 %d 帧、WEP %d 帧；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[2], totals[3], totals[6]))
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

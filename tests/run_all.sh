@@ -23,7 +23,7 @@ run "握手跟踪（MIC 算法、PTK、候选 PMK、合成握手）" python3 tes
 run "握手对照 tshark（37 个握手：MIC 自证 + KCK / TK）" python3 tests/oracle/test_handshake_oracle.py
 run "CCMP / GCMP / TKIP / WEP 解密（数据帧与 PMF 管理帧，独立加密方）" python3 tests/test_decrypt.py
 run "TKIP 密钥混合对照 tshark（27 个合成帧）" python3 tests/oracle/test_tkip_oracle.py
-run "解密对照 tshark 明文（单播 1092、组播 175、PMF 管理帧 6、WEP 11 帧逐字节）" python3 tests/oracle/test_decrypt_diff.py
+run "解密对照 tshark 明文（单播 1094、组播 175、PMF 管理帧 6、WEP 11 帧逐字节）" python3 tests/oracle/test_decrypt_diff.py
 run "组密钥（KDE、Key Data 解包、GTK / IGTK、组播帧解密）" python3 tests/test_groupkeys.py
 run "组密钥对照 tshark 的 GTK（48 个，19 个相同）" python3 tests/oracle/test_groupkeys_oracle.py
 run "BIP（四种套件的独立构造、IGTK 选择、组管理套件）" python3 tests/test_bip.py
@@ -34,9 +34,11 @@ run "SAE 认证帧与曲线检查（独立生成的点）" python3 tests/test_sa
 run "SAE / OWE 对照 tshark（commit / confirm / DH 参数，曲线上的点）" python3 tests/oracle/test_sae_diff.py
 run "解密后的内容（LLC/SNAP、ARP、IP、UDP、TCP、ICMP、DHCP 与校验和，scapy 独立构造）" python3 tests/test_net.py
 run "解密流水线接线（WEP 合成帧、A-MSDU）" python3 tests/test_pipeline.py
-run "解密后的内容对照 tshark（1299 个数据帧逐层，校验和全部吻合）" python3 tests/oracle/test_net_diff.py
+run "解密后的内容对照 tshark（1301 个数据帧逐层，校验和全部吻合）" python3 tests/oracle/test_net_diff.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
+run "TDLS（建立帧、TPK、MIC、直连帧解密，独立构造）" python3 tests/test_tdls.py
+run "TDLS 对照 tshark（wpa-test-decode-tdls）" python3 tests/oracle/test_tdls_oracle.py
 run "EAPOL-Key 解析与帧迭代" python3 tests/test_eapol.py
 run "EAPOL-Key 对照 tshark（109 帧）" python3 tests/oracle/test_eapol_diff.py
 run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test_kdf80211.py

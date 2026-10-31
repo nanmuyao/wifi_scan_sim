@@ -105,7 +105,7 @@ EXPECTED = {
     "wpa-gcmp.pcapng.gz": (15, {'snap/arp': 4, 'snap/ipv4/icmp': 2, 'snap/ipv4/udp/dhcp': 9}, 0, 0, 0),
     "wpa-mlo-ccmp.pcapng.gz": (0, {}, 0, 0, 0),
     "wpa-test-decode-mgmt.pcap.gz": (0, {}, 0, 0, 0),
-    "wpa-test-decode-tdls.pcap.gz": (6, {'snap': 6}, 0, 0, 0),
+    "wpa-test-decode-tdls.pcap.gz": (8, {'snap': 6, 'snap/ipv4/icmp': 2}, 0, 0, 0),
     "wpa-test-decode.pcap.gz": (756, {'snap': 5, 'snap/arp': 48, 'snap/ipv4': 40, 'snap/ipv4/icmp': 439, 'snap/ipv4/udp': 89, 'snap/ipv4/udp/dhcp': 7, 'snap/ipv6/icmpv6': 60, 'snap/ipv6/udp': 68}, 0, 0, 0),
     "wpa1-gtk-rekey.pcapng.gz": (22, {'snap': 6, 'snap/ipv4/icmp': 8, 'snap/ipv4/udp/dhcp': 8}, 0, 0, 0),
     "wpa2-ft-eap.pcapng.gz": (4, {'snap/arp': 2, 'snap/ipv4/icmp': 2}, 0, 0, 0),
@@ -156,7 +156,7 @@ for name in sorted(os.listdir(fetch_samples.SAMPLE_DIR)):
     check(diff == 0, "%s：和 tshark 的协议字段逐帧一致" % name)
     check(row == EXPECTED[name], "%s：%s（表里 %s）" % (name, row, EXPECTED[name]))
 if EXPECTED:
-    check(total == 1299 and ours_only_frames == 20 and amsdu_frames == 0, "共 %d 个解出的数据帧，其中 %d 个是 tshark 没有答案、靠校验和（和 CCMP 的 MIC）判断的；A-MSDU 帧 %d" % (total, ours_only_frames, amsdu_frames))
+    check(total == 1301 and ours_only_frames == 20 and amsdu_frames == 0, "共 %d 个解出的数据帧，其中 %d 个是 tshark 没有答案、靠校验和（和 CCMP 的 MIC）判断的；A-MSDU 帧 %d" % (total, ours_only_frames, amsdu_frames))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

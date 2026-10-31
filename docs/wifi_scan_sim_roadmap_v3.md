@@ -409,6 +409,15 @@ wpa-mlo-ccmp 的 4 个多链路数据帧 tshark 和我们都解不开：抓包�
 **测试**：`tests/aead_build.py` 的独立构造支持 MLD 地址；`tests/test_decrypt.py`（MLD 映射的各种缺项、user TK）、`tests/test_groupkeys.py`（`mlo_keys`）；
 对这批代码的 34 个改动做变异检查，起初 4 个存活：3 个补用例后抓住（链路 ID 占 4 位、6 字节的链路 KDE、管理帧不用 MLD 表），1 个等价（`_infer_bip` 里按 MIC 长度过滤——长度不对的套件验证本来就会失败）。
 
+### TDLS（G-TDLS）
+两个站点经 AP 交换三条建立帧（数据帧，以太类型 0x890d，先由各自的 PTK 保护），推出对等密钥 TPK 后直接互发加密帧（`tdls80211.py`）。
+Nonce 在 FTE 里（Response 带 ANonce 和 SNonce）：**TPK-Key-Input = SHA-256(min ‖ max(两个 Nonce))；TPK = KDF-256(Key-Input, "TDLS PMK", min ‖ max(两个 MAC) ‖ BSSID)，前 128 比特是 TPK-KCK、后 128 比特是 TPK-TK**（CCMP-128）。
+FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 2、Confirm 3) ‖ 链路标识元素 ‖ RSNE ‖ 超时间隔元素 ‖ FTE（MIC 清零）)——元素的排列是在真实的 Response 和 Confirm 上试出来的，两个 MIC 都吻合。
+**结果**（wpa-test-decode-tdls）：推出的 TPK-TK 就是 tshark 额外打出的那把 TK（握手测试里「tshark 多出 1 个 TK」）；对端直连的 2 个帧解出，与 tshark 明文逐字节相同，IPv4 / ICMP 校验和吻合。
+至此样例里 tshark 能解的受保护帧里没有留下任何一个解不开的（`no_hs` 归零）。流水线 `decrypt_capture` 最后一步用 TPK 解直连帧（`how = "tdls"`）。
+**测试**：`tests/test_tdls.py`（MIC 用 pycryptodome 的 CMAC、KDF 用 hmac 手写、直连帧用独立构造）；对 TDLS 模块的 30 多个改动做变异检查，起初存活 5 个：
+成对套件检查（测试里 MIC 没跟着改，所以检查没起作用）、去重键里的令牌、SNAP 前缀检查、缺链路标识的容错——补用例后抓住；`pipeline` 里「已解开的帧跳过」是等价的优化。
+
 ### 阶段 F：解密之后的内容（已完成）
 - 解密后只做到能验证“解对了”：LLC/SNAP → ARP / IPv4 / IPv6 / UDP / TCP / ICMP / ICMPv6 / DHCP 的最小解析（`net80211.py`），以及把前面各层接起来的 `pipeline80211.decrypt_capture`
   （握手 + 重新握手 + FT 漫游 → PTK，M3 / G1 / FT 响应 → GTK，WEP 密钥；逐帧试 WEP / 单播 / 组播；A-MSDU 拆开）。不做 TLS 等更上层的内容。
