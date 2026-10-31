@@ -300,5 +300,78 @@ check(len(done) == 1, "FT-802.1X 的 XXKey 是 MSK 的第二个 256 比特（取
 done, skipped = run(build_ft(13, "sha384", MSK[32:80], 24, 0), [("msk", MSK[:64].hex())])
 check(done == [], "AKM 13 的 XXKey 要 48 字节（MSK 的第 33-80 字节）：MSK 只有 64 字节时没有候选")
 
+print("== 快速切换的空中漫游（合成：重关联请求的 FTE MIC）==")
+NEW_AP, R1KH_NEW = H("02aabbccdd55"), H("02aabbccdd56")
+RSNXE = ie_(244, b"\x20")
+
+
+def roam_frame(akm, hash_name, xx, mic_len, rsnxe_used=True, bad_mic=False, r0kh=R0KH_ID, drop_rsnxe=False, no_fte=False, mdid=MDID_, r1kh=R1KH_NEW, bad_pmkid=False,
+               drop_mde=False, drop_rsne=False, prot=0):
+    """重关联请求：RSNE（PMKID = 新 AP 的 PMKR1Name）‖ MDE ‖ FTE ‖ [RSNXE]；MIC 由测试按标准独立算好（CMAC 用 pycryptodome）。"""
+    from Crypto.Hash import CMAC
+    from Crypto.Cipher import AES
+    an, sn = bytes([21]) * 32, bytes([22]) * 32
+    kck_len, kek_len = hs.KEY_LENGTHS[hash_name]
+    r0, r0n = ft80211.derive_r0(xx, hash_name, FT_SSID, MDID_, R0KH_ID, STA)
+    r1, r1n = ft80211.derive_r1(r0, hash_name, r0n, R1KH_NEW, STA)       # 密钥始终按「真」的 R1KH-ID 推；r1kh / mdid 参数只改帧里写的
+    kck, _, _ = ft80211.derive_ptk(r1, hash_name, sn, an, NEW_AP, STA, kck_len, kek_len, 16)
+    rsne = rsn_ft(akm, bytes(16) if bad_pmkid else r1n)
+    mde = bytes([54, 3]) + mdid + b"\x01"
+    sub = bytes([1, len(r1kh)]) + r1kh + bytes([3, len(r0kh)]) + r0kh
+    ctrl = bytes([(1 if rsnxe_used else 0) | {16: 0, 24: 1, 32: 2}[mic_len] << 1, 3 + (1 if rsnxe_used else 0)])
+    body = lambda mic: bytes([55, 2 + mic_len + 64 + len(sub)]) + ctrl + mic + an + sn + sub          # noqa: E731
+    msg = STA + NEW_AP + b"\x05" + rsne + mde + body(bytes(mic_len)) + (RSNXE if rsnxe_used else b"")
+    if akm in (3, 4, 9):
+        mic = CMAC.new(kck, ciphermod=AES, msg=msg).digest()
+    else:
+        mic = hmac.new(kck, msg, getattr(hashlib, hash_name)).digest()[:mic_len]
+    if bad_mic:
+        mic = bytes(mic_len)
+    elems = (b"" if drop_rsne else rsne) + (b"" if drop_mde else mde) + (b"" if no_fte else body(mic)) + (RSNXE if rsnxe_used and not drop_rsnxe else b"")
+    return with_addrs(NEW_AP, STA, NEW_AP, lambda: synth.frame(0, 2, prot=prot, body=bytes(10) + elems)), r1, r1n
+
+
+import hashlib  # noqa: E402
+import hmac  # noqa: E402
+
+for akm, hash_name, xx, key, mic_len, ver, rsnxe in (
+        (4, "sha256", PSK32, ("wpa-psk", PSK32.hex()), 16, 3, False),
+        (9, "sha256", PSK32, ("wpa-psk", PSK32.hex()), 16, 0, True),
+        (25, "sha384", MSK[:48], ("wpa-psk", MSK[:48].hex()), 24, 0, True),
+        (19, "sha384", PSK32, ("wpa-psk", PSK32.hex()), 24, 0, False)):
+    init = build_ft(akm, hash_name, xx, mic_len, ver)
+    rf, r1, r1n = roam_frame(akm, hash_name, xx, mic_len, rsnxe_used=rsnxe)
+    done, skipped = run(init + [rf], [key])
+    ok = len(done) == 2 and not skipped
+    r = done[1] if ok else None
+    check(ok and (r.ap, r.sta) == (mac(NEW_AP), mac(STA)) and r.pmk[1] == r1 and r.frames["roam"] and r.frames["pmkr1name_ok"] and r.ft["pmk_r0"] == done[0].ft["pmk_r0"] and r.kdf == hash_name,
+          "AKM %d（%s）：漫游到新 AP，PMK-R1 / PMKR1Name 由同一个 PMK-R0 换了 R1KH-ID 推出，RSNXE %s" % (akm, hash_name, "在 MIC 里" if rsnxe else "不在"))
+    bad, sk = run(init + [roam_frame(akm, hash_name, xx, mic_len, rsnxe_used=rsnxe, bad_mic=True)[0]], [key])
+    check(len(bad) == 1 and sk and "空中漫游" in sk[0][1], "AKM %d：FTE 的 MIC 不对：不收，说明原因" % akm)
+init = build_ft(9, "sha256", PSK32, 16, 0)
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, rsnxe_used=True, drop_rsnxe=True)[0]], [("wpa-psk", PSK32.hex())])
+check(len(done) == 1 and sk, "MIC Control 说用了 RSNXE，帧里却没有：不收")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, rsnxe_used=False)[0]], [("wpa-psk", PSK32.hex())])
+check(len(done) == 2, "RSNXE 已用位没置：MIC 里不含 RSNXE，照样验证通过")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, no_fte=True)[0]], [("wpa-psk", PSK32.hex())])
+check(len(done) == 1 and not sk, "没有 FTE 的重关联请求不是 FT 漫游：忽略，不当成失败")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, r0kh=b"other-r0kh")[0]], [("wpa-psk", PSK32.hex())])
+check(len(done) == 1 and sk, "R0KH-ID 与初始握手的不同：找不到对应的 PMK-R0")
+KEYS9 = [("wpa-psk", PSK32.hex())]
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, mdid=H("c3d4"))[0]], KEYS9)
+check(len(done) == 1 and sk, "重关联请求里的移动域 ID 与初始握手的不同（MIC 按帧里的算对）：不是同一个移动域，不收")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, r1kh=R1KH_NEW[:5])[0]], KEYS9)
+check(len(done) == 1 and not sk, "R1KH-ID 不是 6 字节：不是合规的 FT 请求，忽略")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, bad_pmkid=True)[0]], KEYS9)
+check(len(done) == 2 and done[1].frames["pmkr1name_ok"] is False, "RSNE 里的 PMKID 不是 PMKR1Name：MIC 对就收，pmkr1name_ok 为 False")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, drop_mde=True)[0]], KEYS9)
+check(len(done) == 1 and not sk, "缺移动域元素：不是完整的 FT 请求，忽略")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, drop_rsne=True)[0]], KEYS9)
+check(len(done) == 1 and not sk, "缺 RSNE：忽略")
+done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, prot=1)[0]], KEYS9)
+check(len(done) == 1 and not sk, "受保护（加密）的重关联请求：看不懂内容，忽略")
+done, sk = run([roam_frame(9, "sha256", PSK32, 16)[0]], [("wpa-psk", PSK32.hex())])
+check(done == [] and sk and "空中漫游" in sk[0][1], "没有初始握手：没有 PMK-R0 可用，不能凭空产生握手，说明原因")
+
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)

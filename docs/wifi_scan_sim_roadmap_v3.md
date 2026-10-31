@@ -342,7 +342,22 @@ wpa3-ft-sae-ext-key-group20（AKM 25，48 字节 PMK，SHA-384）tshark 4.4 没�
 **测试**：`tests/test_ft.py`——真实抓包的已知答案（wpa2-ft-eap：PMKR1Name 是真实设备算出的，KCK / TK 是 tshark 的；group20：整个 PTK 由真实 M2 的 MIC 验证）+ 用 hmac 手写的公式对照 + 每个输入都起作用；
 `tests/test_handshake.py` 里合成 8 种 FT 握手（AKM 3 / 4 / 9 / 13 / 19 / 25×3 个哈希档位）、错的 / 缺的 PMKID、缺关联响应；
 对 ft80211 的 14 个改动和 FT 跟踪代码的 14 个改动做变异检查，起初 3 个存活（PMKID 比较写死 True、AKM 13 的哈希与 XXKey 长度），补合成测试后全部抓住。
-**还没做**：空中漫游（认证帧的 FTE 里有 SNonce / ANonce，漫游后新 AP 的 PTK 不走 4 次握手，用重关联请求 FTE 里的 MIC 验证）——wpa2-ft-psk 还有 5 帧、tshark 多出 1 个 TK；漫游后的 GTK。
+**空中漫游**见下一节；漫游后的 GTK 还没做。
+
+### FT 空中漫游（E2）
+漫游（FT 协议）不走 4 次握手：STA 发认证（算法 2）和重关联请求，新 AP 的 PTK 由已有的 PMK-R0 换上新 AP 的 R1KH-ID 推出。
+`handshake80211._ft_roam`：重关联请求带 RSNE（PMKID = 新 AP 的 PMKR1Name）、MDE、FTE（ANonce、SNonce、新 AP 的 R1KH-ID、R0KH-ID、MIC）。
+用 FT 初始握手保存下来的 PMK-R0（`Handshake.ft`）推 PMK-R1 和 PTK，再验证 FTE 的 MIC：
+MIC = CMAC（AKM 3 / 4 / 9）或 HMAC（其余，哈希同 KDF）(KCK, STA ‖ AP ‖ 序号 5 ‖ RSNE ‖ MDE ‖ FTE（MIC 清零）‖ [RSNXE])。
+**踩到的坑**：wpa2-ft-psk 一次就对，两个 WPA3 样例的 MIC 对不上，但 PMKR1Name 吻合——说明密钥推导没错，是 MIC 的内容不对。
+看 FTE 的 MIC Control：元素个数是 4、「RSNXE 已用」位置位（H2E 的样例），**RSNXE 也在 MIC 的覆盖范围里，排在 FTE 之后**。加上就吻合。
+**结果**：3 个 FT 样例各 1 次漫游全部验证（FTE 的 MIC + PMKR1Name 两把尺子）；握手 34 -> 37 个（tshark 印证 29 -> 30：wpa2-ft-psk 的漫游 TK 与 tshark 相同，
+wpa3-ft-sae-h2e 的漫游 tshark 没有打出 TK，ext-key-group20 的 tshark 本来就没有答案）。数据帧：与 tshark 明文相同的单播 1088 -> 1092；
+tshark 解不了而我们解开的 6 -> 13 帧（h2e 漫游后的 6 帧、group20 漫游后的 1 帧），它们的完整性靠 CCMP 的 MIC。
+**测试**：`tests/test_handshake.py` 合成漫游（AKM 4 / 9 / 25 / 19，MIC 由测试用 pycryptodome 的 CMAC 与 hmac 独立算），覆盖 RSNXE 在 / 不在 MIC 里、MIC 错、R0KH-ID 或移动域 ID 不同、
+R1KH-ID 长度不对、PMKID 不对、缺 MDE / RSNE / FTE、受保护的帧、没有初始握手；对 `_ft_roam` 的 22 个改动做变异检查，起初 7 个存活，补用例后只剩 2 个等价改动
+（按 STA 地址筛初始握手：别的 STA 的 PMK-R0 会让 MIC 对不上；初始握手的排序：同一个 XXKey 推出的 PMK-R0 相同）。
+**还没做**：漫游后新 AP 的 GTK（在重关联响应的 FTE 的 GTK 子元素里，用 KEK 包装）——wpa2-ft-psk 还有 1 帧组播没解开。
 
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：

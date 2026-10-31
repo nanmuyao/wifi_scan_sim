@@ -39,7 +39,8 @@ KDF_BY_MIC_LEN = {16: "sha256", 24: "sha384", 32: "sha512"}
 # 哈希 -> (KCK 字节数, KEK 字节数)
 KEY_LENGTHS = {"sha1": (16, 16), "sha256": (16, 16), "sha384": (24, 32), "sha512": (32, 32)}
 
-Handshake = namedtuple("Handshake", "ap sta anonce snonce pmk akm cipher kdf descriptor version kck kek tk mic_alg mic_len frames")
+Handshake = namedtuple("Handshake", "ap sta anonce snonce pmk akm cipher kdf descriptor version kck kek tk mic_alg mic_len frames ft", defaults=(None,))
+# ft：快速切换握手才有，{"pmk_r0", "r0name", "ssid", "mdid", "r0kh_id"}——漫游到别的 AP 时从 PMK-R0 重新推 PMK-R1 要用
 
 
 def mic_algorithm(version, mic_len, akm=None):
@@ -183,6 +184,13 @@ def track(frames, keys):
     pending = {}                     # (ap, sta) -> 最近的 M1 (anonce, replay_counter, 帧号)
     done, skipped = [], []
     for f in frames:
+        if f.h["type"] == 0 and f.h["subtype"] == 2 and not f.h["protected"]:
+            roam = _ft_roam(f, done)
+            if roam == "mismatch":
+                skipped.append((f.n, "空中漫游的重关联请求：没有 FT 握手的 PMK-R0 让 FTE 的 MIC 吻合"))
+            elif roam is not None:
+                done.append(roam)
+            continue
         raw = fr.eapol_payload(f)
         if raw is None and f.h["protected"]:
             raw = _decrypted_eapol(done, f)
@@ -236,6 +244,43 @@ def ft_contexts(frames):
     return out
 
 
+def _ft_roam(f, done):
+    """空中漫游（FT 协议）：重关联请求带 RSNE（PMKID = 新 AP 的 PMKR1Name）、MDE、FTE（ANonce、SNonce、新 AP 的 R1KH-ID、R0KH-ID 和 MIC）。
+    用已推出的 FT 初始握手里的 PMK-R0，换上新 AP 的 R1KH-ID 推 PMK-R1 和 PTK，再用 FTE 的 MIC 验证：
+    MIC = CMAC / HMAC(KCK, STA ‖ AP ‖ 序号 5 ‖ RSNE ‖ MDE ‖ FTE（MIC 清零）‖ [RSNXE])。不是 FT 的重关联请求返回 None；是 FT 但对不上返回 "mismatch"。"""
+    h = f.h
+    els, _ = ie.walk(f.body[ie.FIXED_LEN[2]:])
+    raw = {}
+    for el in els:
+        if el.ext is None and el.id in (48, 54, 55, 244):
+            raw.setdefault(el.id, el)
+    if 55 not in raw or 54 not in raw or 48 not in raw:
+        return None
+    d = ie.decode_all(els)
+    fte, md, rsn = d.get("fte"), d.get("mdie"), d.get("rsn")
+    if not fte or not md or not rsn or fte["r1kh_id"] is None or fte["r0kh_id"] is None or len(fte["r1kh_id"]) != 6:
+        return None
+    sta, ap = h["addr2"], h["addr1"]
+    mdid = md["mdid"].to_bytes(2, "little")
+    elem = lambda el: bytes([el.id, len(el.data)]) + el.data                       # noqa: E731
+    fte_raw = elem(raw[55])
+    zeroed_fte = fte_raw[:4] + bytes(fte["mic_length"]) + fte_raw[4 + fte["mic_length"]:]
+    message = _mac(sta) + _mac(ap) + b"\x05" + elem(raw[48]) + elem(raw[54]) + zeroed_fte
+    if fte["rsnxe_used"]:                       # MIC Control 的「RSNXE 已用」位置位：RSNXE（H2E 的 WPA3 样例）也在 MIC 的覆盖范围里，排在 FTE 之后
+        if 244 not in raw:
+            return "mismatch"
+        message += elem(raw[244])
+    for x in sorted((x for x in done if x.sta == sta and x.ft and x.ft["mdid"] == mdid and x.ft["r0kh_id"] == fte["r0kh_id"]), key=lambda x: -x.frames["m2"]):
+        pmk_r1, r1name = ft80211.derive_r1(x.ft["pmk_r0"], x.kdf, x.ft["r0name"], fte["r1kh_id"], _mac(sta))
+        kck_len, kek_len = KEY_LENGTHS[x.kdf]
+        kck, kek, tk = ft80211.derive_ptk(pmk_r1, x.kdf, fte["snonce"], fte["anonce"], _mac(ap), _mac(sta), kck_len, kek_len, len(x.tk))
+        alg = "cmac" if x.akm in (3, 4, 9) else "hmac-" + x.kdf
+        if hmac.compare_digest(compute_mic(alg, kck, message, fte["mic_length"]), fte["mic"]):
+            return Handshake(ap, sta, fte["anonce"], fte["snonce"], (x.pmk[0], pmk_r1), x.akm, x.cipher, x.kdf, x.descriptor, x.version, kck, kek, tk, alg,
+                             fte["mic_length"], {"m1": f.n, "m2": f.n, "pmkr1name_ok": r1name in (rsn.get("pmkids") or []), "roam": True}, x.ft)
+    return "mismatch"
+
+
 def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids):
     """快速切换的初始 4 次握手：XXKey -> PMK-R0 -> PMK-R1 -> PTK（ft80211），用 M2 的 MIC 验证；
     M2 的 RSN 元素里的 PMKID 应当等于推出的 PMKR1Name，是第二个独立的验证（结果放在 frames["pmkr1name_ok"]）。"""
@@ -256,7 +301,8 @@ def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids):
         kck, kek, tk = ft80211.derive_ptk(pmk_r1, kdf_hash, snonce, anonce, _mac(ap), _mac(sta), kck_len, kek_len, tk_len)
         if hmac.compare_digest(compute_mic(alg, kck, zeroed, mic_len), e2["mic"]):
             return Handshake(ap, sta, anonce, snonce, (source, pmk_r1), akm, CIPHERS[cipher][0], kdf_hash, descriptor, version,
-                             kck, kek, tk, alg, mic_len, {"m1": m1[2], "m2": f.n, "pmkr1name_ok": r1name in pmkids})
+                             kck, kek, tk, alg, mic_len, {"m1": m1[2], "m2": f.n, "pmkr1name_ok": r1name in pmkids},
+                             {"pmk_r0": pmk_r0, "r0name": r0name, "ssid": ssid, "mdid": ctx.mdid, "r0kh_id": ctx.r0kh_id})
     return None
 
 

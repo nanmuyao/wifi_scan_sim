@@ -48,7 +48,7 @@ usable, _ = d.tshark_usable(keys)
 # 「被印证」= 我们的 KCK 或 TK 出现在 tshark 的输出里（TKIP 的 TK 是 32 字节，tshark 只打前 16 字节，按前缀比）。
 # tshark 多出来的密钥来自我们还没处理的握手：
 #   （重新握手的 EAPOL 帧被当前 PTK 加密，现在边解密边跟踪，D4c-2 起不再有多出来的：wpa-eap-tls 3 个、wpa-test-decode 2 个、wpa_ptk_extended_key_id 2 个重新握手）
-#   - 快速切换（FT）的空中漫游（认证帧里的 FTE 带 Nonce，不走 4 次握手）：wpa2-ft-psk 的 1 个 TK（阶段 E 下一步）；
+#   （快速切换的空中漫游由重关联请求的 FTE MIC 验证，每个 FT 样例 1 次，wpa3-ft-sae-h2e 的漫游 tshark 没有打出 TK，所以那一个只有我们的两把尺子）
 #   - TDLS 的对等密钥（TPK）握手在 TDLS 动作帧里，不是 4 次握手：wpa-test-decode-tdls 的 1 个 TK。
 # 我们的握手数 > 被印证数 的：tshark 4.4 做不到的（48 / 64 字节的 PMK：owe-3-dh-groups 的 2 个、wpa3-sae-ext-key-group21；多链路：wpa3-mlo），只有 MIC 自证。
 EXPECTED = {
@@ -56,9 +56,9 @@ EXPECTED = {
     "wpa-Induction.pcap.gz": (1, 1, 0, 0, 0), "wpa-ccmp-256.pcapng.gz": (1, 1, 0, 0, 0), "wpa-eap-tls.pcap.gz": (4, 4, 0, 0, 0),
     "wpa-gcmp-256.pcapng.gz": (1, 1, 0, 0, 0), "wpa-gcmp.pcapng.gz": (1, 1, 0, 0, 0), "wpa-mlo-ccmp.pcapng.gz": (0, 0, 0, 0, 0),
     "wpa-test-decode-mgmt.pcap.gz": (1, 1, 0, 0, 0), "wpa-test-decode-tdls.pcap.gz": (2, 2, 0, 0, 1), "wpa-test-decode.pcap.gz": (3, 3, 0, 0, 0),
-    "wpa1-gtk-rekey.pcapng.gz": (1, 1, 0, 0, 0), "wpa2-ft-eap.pcapng.gz": (1, 1, 0, 0, 0), "wpa2-ft-psk.pcapng.gz": (1, 1, 0, 0, 1),
+    "wpa1-gtk-rekey.pcapng.gz": (1, 1, 0, 0, 0), "wpa2-ft-eap.pcapng.gz": (1, 1, 0, 0, 0), "wpa2-ft-psk.pcapng.gz": (2, 2, 0, 0, 0),
     "wpa2-psk-ccmp-tkip.pcapng.gz": (1, 1, 0, 0, 0), "wpa2-psk-mfp.pcapng.gz": (1, 1, 0, 0, 0),
-    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (1, 0, 0, 0, 0), "wpa3-ft-sae-h2e.pcapng.gz": (1, 1, 0, 0, 0),
+    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (2, 0, 0, 0, 0), "wpa3-ft-sae-h2e.pcapng.gz": (2, 1, 0, 0, 0),
     "wpa3-mlo.pcapng.gz": (1, 0, 0, 0, 0), "wpa3-sae-ext-key-group21.pcapng.gz": (1, 0, 0, 0, 0), "wpa3-sae.pcapng.gz": (1, 1, 0, 0, 0),
     "wpa3-suiteb-192.pcapng.gz": (3, 3, 0, 0, 0), "wpa_ptk_extended_key_id.pcap.gz": (3, 3, 0, 0, 0),
 }
@@ -78,8 +78,8 @@ for name in sorted(os.listdir(fetch_samples.SAMPLE_DIR)):
     confirmed += conf
     check((len(done), conf) + extra == EXPECTED[name],
           "%s：握手 %d 个（MIC 自证），被 tshark 印证 %d 个；tshark 多出的 KCK / KEK / TK = %s（表里 %s）" % (name, len(done), conf, extra, EXPECTED[name]))
-check(total == 34 and confirmed == 29, "共 %d 个握手通过 MIC 自证，其中 %d 个也被 tshark 印证" % (total, confirmed))
-check(len(ft_names) == 4 and all(ok for _, ok in ft_names), "4 个快速切换握手：M2 里的 PMKID 都等于推出的 PMKR1Name（第二个独立的证明）：%s" % ft_names)
+check(total == 37 and confirmed == 30, "共 %d 个握手通过 MIC 自证，其中 %d 个也被 tshark 印证" % (total, confirmed))
+check(len(ft_names) == 7 and all(ok for _, ok in ft_names), "7 个快速切换握手（4 个初始握手 + 3 次空中漫游）：PMKID 都等于推出的 PMKR1Name（第二个独立的证明）：%s" % ft_names)
 check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
 
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
