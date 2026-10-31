@@ -329,6 +329,21 @@ wpa3-mlo 的 2 个信标没有可用的 IGTK（多链路的 IGTK 在另一种 KD
 **CMAC-128 / CMAC-256 / GMAC-128 没有真实帧**：用 pycryptodome 的 CMAC / GCM 独立构造，消息构造（AAD、清零的 MIC）与真实帧上验证过的 GMAC-256 是同一套，算法本身有 RFC 4493 / NIST 向量。
 对 BIP 代码的 18 个改动做变异检查，全部被抓住。
 
+### 快速切换（FT）的初始握手（E1b）
+`ft80211.py`：XXKey -> PMK-R0 / PMKR0Name -> PMK-R1 / PMKR1Name -> PTK（公式见模块说明；PTK 的上下文是 SNonce ‖ ANonce ‖ BSSID ‖ STA，Nonce 不排大小、地址不排大小）。
+`handshake80211` 把 FT 的 AKM（3 / 4 / 9 / 13 / 19 / 25）接进 `track()`：从（重）关联响应取移动域 ID 和 FTE 里的 R0KH-ID / R1KH-ID（`ft_contexts`），
+SSID 取信标，XXKey 取自密钥表（FT-PSK：PSK；FT-SAE：SAE 的 PMK；FT-802.1X：**MSK 的第二个 256 比特**），用 M2 的 MIC 验证；
+M2 的 RSN 元素里的 PMKID 应当等于推出的 PMKR1Name，这是**第二个独立的证明**（`frames["pmkr1name_ok"]`）。
+**结果**：4 个 FT 样例的初始握手全部通过 MIC，PMKR1Name 也全部吻合；其中 wpa2-ft-eap、wpa2-ft-psk、wpa3-ft-sae-h2e 的 KCK / TK 与 tshark 相同，
+wpa3-ft-sae-ext-key-group20（AKM 25，48 字节 PMK，SHA-384）tshark 4.4 没有答案，只有这两把尺子。握手 30 -> 34 个（tshark 印证 26 -> 29）。
+数据帧：与 tshark 明文相同的单播 1071 -> 1088、组播 165 -> 174；解出的组密钥 37 -> 41（FT 样例的 M3 都解开了）。
+**踩到的坑**：wpa2-ft-eap 一开始对不上。IEEE 的规则是 FT-802.1X 的 XXKey 取 MSK 的**后** 256 比特，前 256 比特是普通 PMK；tshark 打出的 PMK 是前一半，我最初沿用了。
+这个结论是靠 M2 的 PMKID 吻合确认的（逐个试变体时，PMKR1Name 比 KCK 好用：它不需要 tshark 给答案，也不需要 Nonce）。AKM 13（FT-802.1X-SHA384）按同样的规则取 MSK[32:80]，样例里没有，有合成测试。
+**测试**：`tests/test_ft.py`——真实抓包的已知答案（wpa2-ft-eap：PMKR1Name 是真实设备算出的，KCK / TK 是 tshark 的；group20：整个 PTK 由真实 M2 的 MIC 验证）+ 用 hmac 手写的公式对照 + 每个输入都起作用；
+`tests/test_handshake.py` 里合成 8 种 FT 握手（AKM 3 / 4 / 9 / 13 / 19 / 25×3 个哈希档位）、错的 / 缺的 PMKID、缺关联响应；
+对 ft80211 的 14 个改动和 FT 跟踪代码的 14 个改动做变异检查，起初 3 个存活（PMKID 比较写死 True、AKM 13 的哈希与 XXKey 长度），补合成测试后全部抓住。
+**还没做**：空中漫游（认证帧的 FTE 里有 SNonce / ANonce，漫游后新 AP 的 PTK 不走 4 次握手，用重关联请求 FTE 里的 MIC 验证）——wpa2-ft-psk 还有 5 帧、tshark 多出 1 个 TK；漫游后的 GTK。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。

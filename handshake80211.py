@@ -16,6 +16,7 @@ from collections import namedtuple
 import crypto80211  # noqa: F401  (保证 kdf80211 的依赖可导入)
 import decrypt80211 as dec
 import eapol
+import ft80211
 import frames80211 as fr
 import ie
 import kdf80211
@@ -29,6 +30,11 @@ CIPHERS = {2: ("TKIP", 32), 4: ("CCMP-128", 16), 8: ("GCMP-128", 16), 9: ("GCMP-
 # 认证方式（AKM）-> 推导用的哈希。"by_mic" 表示由 MIC 长度决定（16 -> SHA-256，24 -> SHA-384，32 -> SHA-512，对应 ECC 组 19 / 20 / 21）
 AKMS = {1: "sha1", 2: "sha1", 5: "sha256", 6: "sha256", 8: "sha256", 11: "sha256", 12: "sha384", 18: "by_mic", 24: "by_mic"}
 FT_AKMS = (3, 4, 9, 13, 19, 25)
+# 快速切换的认证方式 -> 哈希（"by_mic" 同上）；XXKey 的字节数（None = 同哈希输出长度）
+FT_HASH = {3: "sha256", 4: "sha256", 9: "sha256", 13: "sha384", 19: "sha384", 25: "by_mic"}
+FT_XXKEY_LEN = {3: 32, 4: 32, 9: 32, 13: 48, 19: 32, 25: None}
+# FT-802.1X（3、13）的 XXKey 是 MSK 的第二个 256 比特（前 256 比特是普通的 PMK）：由 wpa2-ft-eap 的 PMKR1Name 吻合确认（3）；13 样例里没有，按同一条规则
+FT_MSK_OFFSET = {3: 32, 13: 32}
 KDF_BY_MIC_LEN = {16: "sha256", 24: "sha384", 32: "sha512"}
 # 哈希 -> (KCK 字节数, KEK 字节数)
 KEY_LENGTHS = {"sha1": (16, 16), "sha256": (16, 16), "sha384": (24, 32), "sha512": (32, 32)}
@@ -46,7 +52,7 @@ def mic_algorithm(version, mic_len, akm=None):
         return "hmac-sha1"
     if version == 3:
         return "cmac"
-    if akm == 8:
+    if akm in (8, 9):
         return "cmac"
     return {16: "hmac-sha256", 24: "hmac-sha384", 32: "hmac-sha512"}.get(mic_len)
 
@@ -82,9 +88,10 @@ def pmk_from_passphrase(passphrase, ssid):
     return hashlib.pbkdf2_hmac("sha1", passphrase.encode("utf-8"), ssid, 4096, 32)
 
 
-def candidate_pmks(keys, ssid, pmk_len):
+def candidate_pmks(keys, ssid, pmk_len, msk_offset=0):
     """(来源描述, PMK) 列表。keys：[("wpa-pwd" / "wpa-psk" / "msk" / "wep", 值)]。
-    wpa-pwd 的值可以是「口令」或「口令:SSID」；没有 SSID 就用抓包里看到的。"""
+    wpa-pwd 的值可以是「口令」或「口令:SSID」；没有 SSID 就用抓包里看到的。
+    msk：从第 msk_offset 字节起取 pmk_len 字节（普通 802.1X 取开头；快速切换的 802.1X 取第二个 256 比特，msk_offset = 32）。"""
     out = []
     for typ, val in keys:
         if typ == "wpa-pwd":
@@ -104,8 +111,8 @@ def candidate_pmks(keys, ssid, pmk_len):
                 raw = bytes.fromhex(val)
             except ValueError:
                 continue
-            if len(raw) >= pmk_len:
-                out.append(("msk:%s…" % val[:8], raw[:pmk_len]))
+            if len(raw) >= msk_offset + pmk_len:
+                out.append(("msk:%s…" % val[:8], raw[msk_offset:msk_offset + pmk_len]))
     return out
 
 
@@ -172,6 +179,7 @@ def track(frames, keys):
     """frames：frames80211.iter_frames 的结果（列表）。返回 (成功的握手 [Handshake], 失败 / 跳过的 [(帧号, 原因)])。"""
     ssids = ssids_by_bssid(frames)
     mld = mld_addresses(frames)
+    ft_ctx = ft_contexts(frames)
     pending = {}                     # (ap, sta) -> 最近的 M1 (anonce, replay_counter, 帧号)
     done, skipped = [], []
     for f in frames:
@@ -196,18 +204,60 @@ def track(frames, keys):
             if akm is None:
                 skipped.append((f.n, "M2 的 Key Data 里没有 RSN / WPA 元素"))
                 continue
-            if akm in FT_AKMS:
-                skipped.append((f.n, "快速切换（AKM %d）的 PTK 推导不同，阶段 E" % akm))
-                continue
-            if akm not in AKMS or cipher not in CIPHERS:
+            if akm not in AKMS and akm not in FT_AKMS or cipher not in CIPHERS:
                 skipped.append((f.n, "不支持的 AKM %s / 密码套件 %s" % (akm, cipher)))
                 continue
-            hs = _try(f, raw, e, m1, mld.get(ap, ap), mld.get(sta, sta), akm, cipher, ssids.get(h["bssid"]), keys)
+            if akm in FT_AKMS:
+                r = (d_ := ie.decode_all(els)).get("rsn") or {}
+                hs = _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssids.get(h["bssid"]), keys, ft_ctx.get((ap, sta)), r.get("pmkids") or [])
+            else:
+                hs = _try(f, raw, e, m1, mld.get(ap, ap), mld.get(sta, sta), akm, cipher, ssids.get(h["bssid"]), keys)
             if hs is None:
                 skipped.append((f.n, "没有候选 PMK 让 M2 的 MIC 吻合"))
             else:
                 done.append(hs)
     return done, skipped
+
+
+FtContext = namedtuple("FtContext", "mdid r0kh_id r1kh_id frame")
+
+
+def ft_contexts(frames):
+    """{(BSSID, STA): FtContext}：（重）关联响应里的移动域 ID 和 FTE 的 R0KH-ID / R1KH-ID（快速切换的密钥层级要用）。"""
+    out = {}
+    for f in frames:
+        h = f.h
+        if h["type"] != 0 or h["protected"] or h["subtype"] not in (1, 3):
+            continue
+        d = ie.decode_all(ie.walk(f.body[ie.FIXED_LEN[h["subtype"]]:])[0])
+        md, fte = d.get("mdie"), d.get("fte")
+        if md and fte and fte["r0kh_id"] is not None and fte["r1kh_id"] is not None:
+            out[(h["addr2"], h["addr1"])] = FtContext(md["mdid"].to_bytes(2, "little"), fte["r0kh_id"], fte["r1kh_id"], f.n)
+    return out
+
+
+def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids):
+    """快速切换的初始 4 次握手：XXKey -> PMK-R0 -> PMK-R1 -> PTK（ft80211），用 M2 的 MIC 验证；
+    M2 的 RSN 元素里的 PMKID 应当等于推出的 PMKR1Name，是第二个独立的验证（结果放在 frames["pmkr1name_ok"]）。"""
+    if ctx is None or ssid is None:
+        return None
+    anonce, snonce = m1[0], e["nonce"]
+    mic_len = e["mic_len"]
+    kdf_hash = KDF_BY_MIC_LEN[mic_len] if FT_HASH[akm] == "by_mic" else FT_HASH[akm]
+    kck_len, kek_len = KEY_LENGTHS[kdf_hash]
+    tk_len = CIPHERS[cipher][1]
+    descriptor, version = e["descriptor"], e["key_info"]["version"]
+    e2 = eapol.parse(raw, mic_len=mic_len)
+    alg = mic_algorithm(version, mic_len, akm)
+    zeroed = eapol.zero_mic(raw[:4 + e2["length"]], mic_len)
+    for source, xx in candidate_pmks(keys, ssid, FT_XXKEY_LEN[akm] or ft80211.DIGEST_LEN[kdf_hash], FT_MSK_OFFSET.get(akm, 0)):
+        pmk_r0, r0name = ft80211.derive_r0(xx, kdf_hash, ssid, ctx.mdid, ctx.r0kh_id, _mac(sta))
+        pmk_r1, r1name = ft80211.derive_r1(pmk_r0, kdf_hash, r0name, ctx.r1kh_id, _mac(sta))
+        kck, kek, tk = ft80211.derive_ptk(pmk_r1, kdf_hash, snonce, anonce, _mac(ap), _mac(sta), kck_len, kek_len, tk_len)
+        if hmac.compare_digest(compute_mic(alg, kck, zeroed, mic_len), e2["mic"]):
+            return Handshake(ap, sta, anonce, snonce, (source, pmk_r1), akm, CIPHERS[cipher][0], kdf_hash, descriptor, version,
+                             kck, kek, tk, alg, mic_len, {"m1": m1[2], "m2": f.n, "pmkr1name_ok": r1name in pmkids})
+    return None
 
 
 def _try(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys):

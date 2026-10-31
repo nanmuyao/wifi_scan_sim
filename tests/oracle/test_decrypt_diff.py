@@ -92,12 +92,12 @@ EXPECTED = {
     "wpa-test-decode-tdls.pcap.gz": (6, 0, 0, 0, 2, 0, 0),
     "wpa-test-decode.pcap.gz": (716, 40, 0, 0, 0, 0, 0),
     "wpa1-gtk-rekey.pcapng.gz": (16, 6, 0, 0, 0, 0, 0),
-    "wpa2-ft-eap.pcapng.gz": (0, 0, 0, 0, 4, 0, 0),
-    "wpa2-ft-psk.pcapng.gz": (0, 0, 0, 0, 17, 0, 0),
+    "wpa2-ft-eap.pcapng.gz": (3, 1, 0, 0, 0, 0, 0),
+    "wpa2-ft-psk.pcapng.gz": (8, 4, 0, 0, 5, 0, 0),
     "wpa2-psk-ccmp-tkip.pcapng.gz": (8, 4, 0, 0, 0, 0, 0),
     "wpa2-psk-mfp.pcapng.gz": (7, 2, 0, 0, 0, 0, 0),
-    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (0, 0, 0, 0, 0, 0, 0),
-    "wpa3-ft-sae-h2e.pcapng.gz": (0, 0, 0, 0, 10, 0, 0),
+    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (0, 0, 0, 0, 0, 0, 2),
+    "wpa3-ft-sae-h2e.pcapng.gz": (6, 4, 0, 0, 0, 0, 0),
     "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0, 0, 0),
     "wpa3-sae-ext-key-group21.pcapng.gz": (0, 0, 0, 0, 0, 0, 2),
     "wpa3-sae.pcapng.gz": (6, 4, 0, 0, 0, 0, 0),
@@ -114,6 +114,6 @@ if __name__ == "__main__":
         totals = [a + b for a, b in zip(totals, got)]
         check(got == EXPECTED[name], "%s：%s（表里 %s）" % (name, dict(zip(CATEGORIES, got)), dict(zip(CATEGORIES, EXPECTED[name]))))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
-    check(totals[0] == 1071 and totals[1] == 165 and totals[2] == 6 and totals[3] == 11 and totals[5] == 0 and totals[6] == 4, "与 tshark 明文逐字节相同：单播 %d 帧、组播 %d 帧、受保护管理帧 %d 帧、WEP %d 帧；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[2], totals[3], totals[6]))
+    check(totals[0] == 1088 and totals[1] == 174 and totals[2] == 6 and totals[3] == 11 and totals[5] == 0 and totals[6] == 6, "与 tshark 明文逐字节相同：单播 %d 帧、组播 %d 帧、受保护管理帧 %d 帧、WEP %d 帧；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[2], totals[3], totals[6]))
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

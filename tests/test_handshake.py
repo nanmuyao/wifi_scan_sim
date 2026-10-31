@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(ROOT, "tests", "oracle"))
 import eapol  # noqa: E402
 import frames80211 as fr  # noqa: E402
 import handshake80211 as hs  # noqa: E402
+import ft80211  # noqa: E402
 import ie  # noqa: E402
 import synth  # noqa: E402
 import wpa2_handshake as old  # noqa: E402
@@ -46,8 +47,13 @@ except ValueError:
 print("== MIC 算法的选择 ==")
 for args, want in (((1, 16, 2), "hmac-md5"), ((2, 16, 2), "hmac-sha1"), ((3, 16, 6), "cmac"), ((0, 16, 8), "cmac"), ((0, 16, 18), "hmac-sha256"),
                    ((0, 24, 18), "hmac-sha384"), ((0, 32, 18), "hmac-sha512"), ((0, 24, 12), "hmac-sha384"), ((0, 16, 24), "hmac-sha256"),
-                   ((0, 32, 24), "hmac-sha512"), ((0, 20, 18), None)):
+                   ((0, 32, 24), "hmac-sha512"), ((0, 20, 18), None), ((0, 16, 9), "cmac"), ((3, 16, 4), "cmac"), ((0, 24, 25), "hmac-sha384")):
     check(hs.mic_algorithm(*args) == want, "描述符版本 %d、MIC %d 字节、AKM %s -> %s" % (args + (want,)))
+
+print("== msk 的偏移（快速切换的 802.1X 取第二个 256 比特）==")
+check(hs.candidate_pmks([("msk", bytes(range(64)).hex())], None, 32, 32)[0][1] == bytes(range(32, 64)), "msk_offset = 32：取后 32 字节")
+check(hs.candidate_pmks([("msk", bytes(range(64)).hex())], None, 48, 32) == [] and len(hs.candidate_pmks([("msk", bytes(range(80)).hex())], None, 48, 32)[0][1]) == 48, "偏移加长度超过 msk 长度：不取；够长：取 48 字节")
+check(hs.FT_MSK_OFFSET == {3: 32, 13: 32} and set(hs.FT_HASH) == set(hs.FT_AKMS) == set(hs.FT_XXKEY_LEN), "快速切换的 AKM 表：哈希、XXKey 长度、msk 偏移的键一致")
 
 print("== PTK 推导的结构 ==")
 pmk, aa, spa = bytes(range(32)), H("020000000001"), H("020000000002")
@@ -158,7 +164,7 @@ check(done == [] and skipped == [(3, "找不到与 Replay Counter 对应的 M1")
 done, skipped = run(build(key_data=b""), [("wpa-pwd", "password")])
 check(done == [] and skipped and "没有 RSN" in skipped[0][1], "M2 的 Key Data 里没有 RSN 元素：跳过并说明")
 done, skipped = run(build(akm=4), [("wpa-pwd", "password")])
-check(done == [] and "快速切换（AKM 4）" in skipped[0][1], "FT 的 AKM：跳过，注明阶段 E")
+check(done == [] and skipped == [(3, "没有候选 PMK 让 M2 的 MIC 吻合")], "FT 的 AKM 4，但抓包里没有带移动域 / FTE 的关联响应：推不出 PMK-R0，失败并说明（真实的 FT 握手见 test_handshake_oracle）")
 done, skipped = run(build(cipher=1), [("wpa-pwd", "password")])
 check(done == [] and "不支持的 AKM 2 / 密码套件 1" in skipped[0][1], "不支持的密码套件（WEP-40）：跳过并说明")
 done, skipped = run(build(akm=99), [("wpa-pwd", "password")])
@@ -209,6 +215,90 @@ with tempfile.TemporaryDirectory() as tmp:
     synth.write_pcap(path, [prot_req, req, resp, plain])
     m = hs.mld_addresses(list(fr.iter_frames(path)))
     check(m == {mac(STA): mac(MLD_A), mac(LINK2): mac(MLD_A), mac(AP): mac(MLD_B)}, "关联请求给发送方的 MLD 地址和它其它链路的地址；关联响应给 AP 的 MLD 地址；没有 Multi-Link 的帧不产生映射")
+
+print("== ft_contexts：关联响应里的移动域和 FTE ==")
+def fte_el(r0, r1):
+    sub = (bytes([1, 6]) + r1 if r1 else b"") + (bytes([3, len(r0)]) + r0 if r0 else b"")
+    return bytes([55, 2 + 16 + 64 + len(sub)]) + bytes(2 + 16 + 64) + sub
+
+
+MDE = bytes([54, 3, 0x01, 0x02, 0x01])
+R1 = H("020000000100")
+good = with_addrs(STA, AP, AP, lambda: synth.frame(0, 1, body=bytes(6) + MDE + fte_el(b"r0kh-name", R1)))
+no_r1 = with_addrs(STA, H("02aabbccdd01"), H("02aabbccdd01"), lambda: synth.frame(0, 1, body=bytes(6) + MDE + fte_el(b"r0", None)))
+no_mde = with_addrs(STA, H("02aabbccdd02"), H("02aabbccdd02"), lambda: synth.frame(0, 1, body=bytes(6) + fte_el(b"r0", R1)))
+reassoc = with_addrs(STA, H("02aabbccdd03"), H("02aabbccdd03"), lambda: synth.frame(0, 3, body=bytes(6) + MDE + fte_el(b"rr", R1)))
+reqf = with_addrs(AP, STA, AP, lambda: synth.frame(0, 0, body=bytes(4) + MDE + fte_el(b"r0kh-name", R1)))
+prot = with_addrs(STA, H("02aabbccdd04"), H("02aabbccdd04"), lambda: synth.frame(0, 1, prot=1, body=bytes(6) + MDE + fte_el(b"r0", R1)))
+with tempfile.TemporaryDirectory() as tmp:
+    path = os.path.join(tmp, "t.pcap")
+    synth.write_pcap(path, [good, no_r1, no_mde, reassoc, reqf, prot])
+    ctx = hs.ft_contexts(list(fr.iter_frames(path)))
+check(set(ctx) == {(mac(AP), mac(STA)), (mac(H("02aabbccdd03")), mac(STA))}, "只收（重）关联响应；缺 R1KH-ID、缺移动域、关联请求、受保护的帧都不收；键 = (BSSID, STA)")
+c = ctx[(mac(AP), mac(STA))]
+check((c.mdid, c.r0kh_id, c.r1kh_id) == (H("0102"), b"r0kh-name", R1), "移动域 ID 取元素里的原始 2 字节；R0KH-ID、R1KH-ID 来自 FTE 子元素")
+
+print("== 快速切换的初始握手（合成：关联响应带移动域 + FTE，M2 带 PMKID）==")
+R0KH_ID, R1KH_ID_, MDID_ = b"r0kh.example", H("0a0b0c0d0e0f"), H("a1b2")
+FT_SSID = b"ft-net"
+
+
+def rsn_ft(akm, pmkid):
+    body = struct.pack("<H", 1) + SUITE(4) + struct.pack("<H", 1) + SUITE(4) + struct.pack("<H", 1) + SUITE(akm) + struct.pack("<H", 0)
+    if pmkid is not None:
+        body += struct.pack("<H", 1) + pmkid
+    return ie_(48, body)
+
+
+def build_ft(akm, hash_name, xx, mic_len, version, pmkid="right", drop_ctx=False):
+    """beacon + 关联响应（MDE + FTE）+ M1 + M2。哈希、XXKey 的取法由调用方按标准给出，这里只负责合成。"""
+    an, sn = bytes([5]) * 32, bytes([6]) * 32
+    n = ft80211.DIGEST_LEN[hash_name]
+    kck_len, kek_len = hs.KEY_LENGTHS[hash_name]
+    r0, r0n = ft80211.derive_r0(xx, hash_name, FT_SSID, MDID_, R0KH_ID, STA)
+    r1, r1n = ft80211.derive_r1(r0, hash_name, r0n, R1KH_ID_, STA)
+    kck, _, _ = ft80211.derive_ptk(r1, hash_name, sn, an, AP, STA, kck_len, kek_len, 16)
+    pm = {"right": r1n, "wrong": bytes(16), "none": None}[pmkid]
+    m2 = eapol_key(0x0100 | 0x0008 | version, sn, 1, mic=bytes(mic_len), data=rsn_ft(akm, pm))
+    m2 = eapol.zero_mic(m2, mic_len)
+    mic = hs.compute_mic(hs.mic_algorithm(version, mic_len, akm), kck, m2, mic_len)
+    m2 = m2[:81] + mic + m2[81 + mic_len:]
+    m1 = eapol_key(0x0088 | 0x0008 | version, an, 1, mic=bytes(mic_len))
+    mde = bytes([54, 3]) + MDID_ + b"\x01"
+    sub = bytes([1, 6]) + R1KH_ID_ + bytes([3, len(R0KH_ID)]) + R0KH_ID
+    fte = bytes([55, 2 + mic_len + 64 + len(sub)]) + bytes(2 + mic_len + 64) + sub
+    frames = [with_addrs(b"\xff" * 6, AP, AP, lambda: synth.frame(0, 8, body=bytes(12) + ie_(0, FT_SSID))),
+              with_addrs(STA, AP, AP, lambda: synth.frame(0, 1, body=bytes(6) + (b"" if drop_ctx else mde + fte))),
+              with_addrs(STA, AP, AP, lambda: synth.frame(2, 0, 0, 1, body=LLC + m1)),
+              with_addrs(AP, STA, AP, lambda: synth.frame(2, 0, 1, 0, body=LLC + m2))]
+    return frames
+
+
+PSK32, MSK = bytes(range(32)), bytes(range(100, 180))
+for akm, hash_name, xx, key, mic_len, ver, want_alg in (
+        (4, "sha256", PSK32, ("wpa-psk", PSK32.hex()), 16, 3, "cmac"),
+        (3, "sha256", MSK[32:64], ("msk", MSK.hex()), 16, 3, "cmac"),
+        (9, "sha256", PSK32, ("wpa-psk", PSK32.hex()), 16, 0, "cmac"),
+        (13, "sha384", MSK[32:80], ("msk", MSK.hex()), 24, 0, "hmac-sha384"),
+        (19, "sha384", PSK32, ("wpa-psk", PSK32.hex()), 24, 0, "hmac-sha384"),
+        (25, "sha256", PSK32, ("wpa-psk", PSK32.hex()), 16, 0, "hmac-sha256"),
+        (25, "sha384", MSK[:48], ("wpa-psk", MSK[:48].hex()), 24, 0, "hmac-sha384"),
+        (25, "sha512", MSK[:64], ("wpa-psk", MSK[:64].hex()), 32, 0, "hmac-sha512")):
+    done, skipped = run(build_ft(akm, hash_name, xx, mic_len, ver), [key])
+    ok = len(done) == 1 and not skipped
+    h = done[0] if done else None
+    check(ok and (h.akm, h.kdf, h.mic_alg, h.mic_len) == (akm, hash_name, want_alg, mic_len) and h.frames["pmkr1name_ok"] is True and len(h.kck) == hs.KEY_LENGTHS[hash_name][0],
+          "AKM %d：%s，MIC %d 字节（%s），PMKID = PMKR1Name" % (akm, hash_name, mic_len, want_alg))
+done, skipped = run(build_ft(4, "sha256", PSK32, 16, 3, pmkid="wrong"), [("wpa-psk", PSK32.hex())])
+check(len(done) == 1 and done[0].frames["pmkr1name_ok"] is False, "M2 里的 PMKID 不是 PMKR1Name：握手仍成立（MIC 对），pmkr1name_ok 为 False")
+done, skipped = run(build_ft(4, "sha256", PSK32, 16, 3, pmkid="none"), [("wpa-psk", PSK32.hex())])
+check(len(done) == 1 and done[0].frames["pmkr1name_ok"] is False, "M2 没有 PMKID：pmkr1name_ok 为 False")
+done, skipped = run(build_ft(4, "sha256", PSK32, 16, 3, drop_ctx=True), [("wpa-psk", PSK32.hex())])
+check(done == [] and skipped == [(4, "没有候选 PMK 让 M2 的 MIC 吻合")], "关联响应里没有移动域 / FTE：推不出 PMK-R0，失败")
+done, skipped = run(build_ft(3, "sha256", MSK[32:64], 16, 3), [("msk", MSK.hex()[:128]), ("wpa-psk", PSK32.hex())])
+check(len(done) == 1, "FT-802.1X 的 XXKey 是 MSK 的第二个 256 比特（取前 256 比特的 MSK 推出的 PTK 对不上）")
+done, skipped = run(build_ft(13, "sha384", MSK[32:80], 24, 0), [("msk", MSK[:64].hex())])
+check(done == [], "AKM 13 的 XXKey 要 48 字节（MSK 的第 33-80 字节）：MSK 只有 64 字节时没有候选")
 
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)
