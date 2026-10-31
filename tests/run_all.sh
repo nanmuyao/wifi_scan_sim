@@ -19,6 +19,7 @@ for t in esp32_project/tests/test_esp32_*.py; do
 done
 run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "差分工具（tshark 对照）" python3 tests/oracle/test_diff.py
+run "加密原语（CCM / GCM / RC4 / WEP / TKIP / Michael）" python3 tests/test_crypto80211.py
 run "解密标准答案（tshark 用公开密钥解出的明文）" python3 tests/oracle/test_decrypt_oracle.py
 run "A-MSDU 子帧" python3 tests/test_amsdu.py
 run "Action 帧解码" python3 tests/test_action.py

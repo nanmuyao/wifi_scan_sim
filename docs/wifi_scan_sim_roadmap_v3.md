@@ -204,6 +204,18 @@ Multi-Link 的类型、公共信息长度、MLD MAC、链路 ID、站点配置�
 - `tshark -x` 对只有一个数据源的帧不打标题，不能按标题分帧，要按空行分块。
 - `wpa-Induction` 是 WPA/WPA2 混合模式：单播 CCMP（203 帧），组播 TKIP（73 帧）。
 
+### 加密原语（D2）
+`crypto80211.py`：CCM（CCMP-128 与 CCMP-256：AES-128 / 256，MIC 8 / 16 字节）、GCM（GCMP-128 / 256，GHASH 手写）、RC4、CRC-32、WEP、
+TKIP 的密钥混合（第 1、2 阶段，S 盒由 AES S 盒推出）和 Michael。AES 单块用 pycryptodome，其余手写。这里只有算法，不含帧头怎么构造 nonce 和 AAD。
+**验证**：CCM 用 RFC 3610 的官方向量，加上 144 组随机输入（AES-128 / 256，MIC 8 / 16，含空 AAD）与 pycryptodome 的 CCM 逐字节对照；
+GCM 用 NIST 测试用例 1-3，加上 120 组随机输入与 pycryptodome 的 GCM 对照；RC4（RFC 6229）、CRC-32 标准校验值；
+Michael 用 802.11i 附录 H 的 6 个链式向量（密钥是上一步的输出，消息长度 0-7，覆盖所有填充情形）。
+**还没被独立验证的**：TKIP 的密钥混合（第 1、2 阶段）。它没有我能可靠引用的独立向量，现在的测试只有性质（确定性、种子前三字节的结构、加密再解密）；
+变异检查里 4 个针对混合函数细节的变异存活（第 1 阶段的 `+ i`、轮次奇偶、第 2 阶段的 `rotr1`、种子第 3 字节的移位）——
+它们**必须在 D4 用真实 TKIP 帧（`wpa-Induction` 73 帧、`wpa1-gtk-rekey` 22 帧、`wpa2-psk-ccmp-tkip` 4 帧）对照 tshark 的明文来杀死**，在那之前不能算验证过。
+**一个预告**：旧的 `wpa2_handshake.py` 的 `ccmp_build_aad` 把 FC 高字节只保留 ToDS / FromDS（`& 0x03`），标准里 Protected 位在 AAD 里是置 1 的、分片位也保留；
+旧实现很可能只是自己加密自己解密才对得上，会在真实帧上 MIC 失败。AAD 的规则放到 D4 用真实帧裁决，不凭记忆写。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
