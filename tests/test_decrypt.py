@@ -68,6 +68,49 @@ check(not dec.decrypt_aead(TK16, "CCMP-128", mutated(hl + 7, 0x01))[1], "PN5 变
 check(not dec.decrypt_aead(TK16, "CCMP-128", mutated(len(base) - 1, 0x01))[1], "MIC 末字节变了")
 check(not dec.decrypt_aead(TK16, "CCMP-128", mutated(hl + 9, 0x01))[1], "密文变了")
 
+print("== 受保护的单播管理帧（PMF）==")
+MPL = bytes([7, 0])                       # 解除认证的原因码
+for cipher, tk, sub in (("CCMP-128", TK16, 12), ("CCMP-128", TK16, 10), ("CCMP-256", TK32, 12), ("GCMP-128", TK16, 13), ("GCMP-256", TK32, 12)):
+    f = frame(build(cipher, tk, PN, MPL, mgmt=True, subtype=sub, a1=A1))
+    pt, ok, pn = dec.decrypt_aead(tk, cipher, f)
+    check(ok and pt == MPL and pn == PN and f.h["type"] == 0, "%s 管理帧子类型 %d：MIC 通过、明文还原" % (cipher, sub))
+base_m = build("CCMP-128", TK16, PN, MPL, mgmt=True)
+def mut_m(off, xor):
+    b = bytearray(base_m)
+    b[off] ^= xor
+    return frame(bytes(b))
+check(not dec.decrypt_aead(TK16, "CCMP-128", mut_m(0, 0x10))[1], "管理帧的子类型位变了：AAD 里整个保留，MIC 失败（数据帧才屏蔽 b4-b6）")
+check(dec.decrypt_aead(TK16, "CCMP-128", mut_m(1, 0x08 | 0x10 | 0x20))[1], "重试 / 省电 / 更多数据位被屏蔽，MIC 仍通过")
+check(not dec.decrypt_aead(TK16, "CCMP-128", mut_m(10, 0x01))[1], "地址 2 变了")
+check(dec.decrypt_frame([], frame(base_m)) is None, "decrypt_frame 没有握手：None")
+
+print("== WEP（独立加密：ARC4 + zlib.crc32）==")
+import struct as _st  # noqa: E402
+import zlib  # noqa: E402
+from Crypto.Cipher import ARC4  # noqa: E402
+
+WK5, WK13 = bytes.fromhex("1234567890"), bytes(range(1, 14))
+
+
+def wep_frame(key, data, typ=2, iv=b"\x01\x02\x03", key_id=0, ext=False):
+    enc = ARC4.new(iv + key).encrypt(data + _st.pack("<I", zlib.crc32(data)))
+    body = iv + bytes([key_id << 6 | (0x20 if ext else 0)]) + enc
+    fc0 = 0x08 if typ == 2 else 0xB0                  # 数据帧 / 认证帧（管理，子类型 11）
+    d = bytes([fc0, 0x41 if typ == 2 else 0x40, 0, 0]) + A1 + A2 + A3 + b"\x00\x10" + body
+    return frame(d)
+
+
+wf = wep_frame(WK5, PLAIN)
+check(dec.decrypt_wep([WK5], wf) == (PLAIN, WK5), "数据帧：ARC4(IV ‖ 密钥)，ICV 通过")
+check(dec.decrypt_wep([WK13, WK5], wf) == (PLAIN, WK5), "密钥表里有多把：ICV 通过的那把")
+check(dec.decrypt_wep([WK13], wf) is None and dec.decrypt_wep([], wf) is None, "密钥不对 / 没有密钥：None")
+auth = wep_frame(WK13, b"\x01\x00\x03\x00" + bytes(20), typ=0, key_id=2)
+check(dec.decrypt_wep([WK13], auth) is not None and auth.h["type"] == 0, "共享密钥认证第 3 帧（管理帧）也是 WEP，密钥序号 2 照样解")
+check(dec.decrypt_wep([WK5], wep_frame(WK5, PLAIN, ext=True)) is None, "ExtIV 位置位的是 TKIP / CCMP，不是 WEP：None")
+check(dec.decrypt_wep([WK5], frame(wf.dot11[:1] + bytes([wf.dot11[1] & ~0x40]) + wf.dot11[2:])) is None, "受保护位没置：None")
+check(dec.wep_keys([("wep", "1234567890"), ("wep", "zz"), ("wep", "0102"), ("wpa-psk", "1234567890"), ("wep", "00" * 13), ("wep", "00" * 16)]) == [WK5, bytes(13), bytes(16)],
+      "wep_keys：只收十六进制、5 / 13 / 16 字节的")
+
 print("== TKIP：Michael 的密钥方向、DA / SA、优先级、分片 ==")
 import struct  # noqa: E402
 import crypto80211 as c  # noqa: E402

@@ -4,8 +4,8 @@
 
 CCMP / GCMP 帧体 = 8 字节头 ‖ 密文 ‖ MIC（CCMP-128 8 字节，CCMP-256 与 GCMP 16 字节）
   头：PN0 PN1 保留 (ExtIV | 密钥序号<<6) PN2 PN3 PN4 PN5
-  nonce（CCMP，13 字节）：优先级(1) ‖ A2(6) ‖ PN(6，高位在前)；GCMP 的 IV（12 字节）：A2 ‖ PN（高位在前）
-  AAD：帧控制（子类型高 3 位、重试、省电、更多数据清零；受保护位保留）‖ A1 ‖ A2 ‖ A3 ‖ 序号控制（只留分片号）‖ [A4] ‖ [QoS 控制，只留 TID]
+  nonce（CCMP，13 字节）：标志(1：数据帧是 QoS 的 TID、管理帧是 0x10) ‖ A2(6) ‖ PN(6，高位在前)；GCMP 的 IV（12 字节）：A2 ‖ PN（高位在前）
+  AAD：帧控制（数据帧的子类型 b4-b6、重试、省电、更多数据清零；受保护位保留；管理帧的子类型整个保留）‖ A1 ‖ A2 ‖ A3 ‖ 序号控制（只留分片号）‖ [A4] ‖ [QoS 控制，只留 TID]
 """
 import struct
 
@@ -27,7 +27,8 @@ def pn_of(body):
 def aad_of(dot11, h):
     """从完整的 802.11 帧算 AAD（见模块说明）。"""
     fc = bytearray(dot11[:2])
-    fc[0] &= 0x8F                      # 子类型的 b4-b6
+    if h["type"] == 2:
+        fc[0] &= 0x8F                  # 数据帧：子类型的 b4-b6（管理帧的子类型整个保留）
     fc[1] &= ~(0x08 | 0x10 | 0x20) & 0xFF   # 重试、省电、更多数据
     if h["qos"] is not None:
         fc[1] &= ~0x80 & 0xFF          # 顺序位（QoS 数据帧里表示带 HT 控制）
@@ -51,7 +52,7 @@ def decrypt_aead(tk, cipher, frame):
     a2 = _mac(h["addr2"])
     aad = aad_of(frame.dot11, h)
     if cipher.startswith("CCMP"):
-        prio = h["qos"]["tid"] if h["qos"] is not None else 0
+        prio = 0x10 if h["type"] == 0 else (h["qos"]["tid"] if h["qos"] is not None else 0)     # 管理帧：nonce 标志的 bit 4
         nonce = bytes([prio]) + a2 + pn.to_bytes(6, "big")
         pt, ok = c.ccm_decrypt(tk, nonce, aad, body[8:], mic)
     else:
@@ -95,9 +96,9 @@ SUPPORTED = tuple(MIC_LEN) + ("TKIP",)
 def decrypt_frame(handshakes, frame):
     """在已推出的握手里找能解开这一帧的 PTK：同一对地址、M2 在这一帧之前的握手，从新到旧逐个试（重新握手之后到新密钥
     装上之前的帧、Extended Key ID 下新旧两把密钥同时有效，都要靠 MIC 来分辨）。返回 (握手, 明文) 或 None。
-    CCMP / GCMP / TKIP 的单播数据帧。"""
+    CCMP / GCMP / TKIP 的单播数据帧，以及 CCMP / GCMP 保护的单播管理帧（PMF）。"""
     h = frame.h
-    if h["type"] != 2 or not h["protected"]:
+    if h["type"] not in (0, 2) or not h["protected"]:
         return None
     pair = {h["addr1"], h["addr2"]}
     for hs in sorted((x for x in handshakes if {x.ap, x.sta} == pair and x.frames["m2"] < frame.n and x.cipher in SUPPORTED),
@@ -108,4 +109,31 @@ def decrypt_frame(handshakes, frame):
             continue
         if ok:
             return hs, pt
+    return None
+
+
+def wep_keys(keys):
+    """从密钥表（decrypt_oracle.parse_keys 的格式）取出 WEP 密钥：十六进制串，5 / 13 / 16 字节。"""
+    out = []
+    for typ, val in keys:
+        if typ == "wep":
+            try:
+                k = bytes.fromhex(val)
+            except ValueError:
+                continue
+            if len(k) in (5, 13, 16):
+                out.append(k)
+    return out
+
+
+def decrypt_wep(wep, frame):
+    """WEP：数据帧，以及共享密钥认证的第 3 帧（管理帧，受保护位置位）。帧体 = IV(3) ‖ 密钥序号(1) ‖ 密文 ‖ ICV(4)，没有 ExtIV 位。
+    逐个试 wep 里的密钥，ICV 通过的就是（WEP 密钥序号只告诉你第几把，不告诉你密钥值）。返回 (明文, 密钥) 或 None。"""
+    h, body = frame.h, frame.body
+    if not h["protected"] or len(body) < 8 or body[3] & 0x20:
+        return None
+    for k in wep:
+        pt, _key_id, ok = c.wep_decrypt(k, body)
+        if ok:
+            return pt, k
     return None

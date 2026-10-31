@@ -16,10 +16,23 @@ A1, A2, A3, A4 = (bytes([i] * 6) for i in (0x11, 0x22, 0x33, 0x44))
 MAC = lambda b: ":".join("%02x" % x for x in b)  # noqa: E731
 
 
-def build(cipher, tk, pn, plain, *, a1=None, qos=None, to_ds=1, from_ds=0, four=False, htc=False, flags=0, seq=0x0123, frag=0, key_id=0, subtype=None):
+def build(cipher, tk, pn, plain, *, a1=None, qos=None, to_ds=1, from_ds=0, four=False, htc=False, flags=0, seq=0x0123, frag=0, key_id=0, subtype=None, mgmt=False):
     """返回完整 802.11 帧。flags：重试 0x08 / 省电 0x10 / 更多数据 0x20（这些位 AAD 里是 0，加密时不算）。
     AAD 按标准手写：帧控制第 2 字节只留 ToDS / FromDS / 更多分片 / 受保护（0x47），第 1 字节只留 0x8F。"""
     a1 = a1 or A1
+    if mgmt:
+        # 管理帧（如 PMF 的解除认证）：类型 0；帧控制第 1 字节整个进 AAD；CCMP nonce 的标志是 0x10；没有 QoS / 第四地址
+        fc0 = (12 if subtype is None else subtype) << 4
+        hdr = bytes([fc0, 0x40 | flags]) + struct.pack("<H", 0) + a1 + A2 + A3 + struct.pack("<H", seq << 4 | frag)
+        aad = bytes([fc0, 0x40]) + a1 + A2 + A3 + struct.pack("<H", frag)
+        ph = bytes([pn & 0xFF, (pn >> 8) & 0xFF, 0, 0x20 | key_id << 6]) + (pn >> 16).to_bytes(4, "little")
+        if cipher.startswith("CCMP"):
+            c = AES.new(tk, AES.MODE_CCM, nonce=bytes([0x10]) + A2 + pn.to_bytes(6, "big"), mac_len=dec.MIC_LEN[cipher], msg_len=len(plain))
+        else:
+            c = AES.new(tk, AES.MODE_GCM, nonce=A2 + pn.to_bytes(6, "big"), mac_len=16)
+        c.update(aad)
+        ct, tag = c.encrypt_and_digest(plain)
+        return hdr + ph + ct + tag
     if subtype is None:
         subtype = 8 if qos is not None else 0
     fc0 = 0x08 | subtype << 4
