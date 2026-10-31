@@ -2,9 +2,10 @@
 # -*- coding: utf-8 -*-
 """CCMP / GCMP 数据帧解密对照 tshark：样例里 tshark 解出明文的每一帧，用我们握手推出的 TK 解一遍，
 要求 MIC 通过且明文逐字节相同。没法解的帧分类固定成数字（改进或退步都会让测试失败）：
-  ok         MIC 通过、明文与 tshark 相同
+  ok         单播：MIC 通过、明文与 tshark 相同
+  group      组播 / 广播：用 M3 / G1 里解出的 GTK，MIC 通过、明文与 tshark 相同
   mgmt       受保护的管理帧（nonce / AAD 规则不同，下一步）
-  no_hs      找不到适用的已推出握手（组播用 GTK、重新握手之前的 PTK、FT 等）
+  no_hs      找不到适用的密钥（FT、TDLS 对端直连、TKIP 之类还没处理的）
   stale      有握手但解不开
   ours_only  tshark 没解出、我们 MIC 通过（应为 0：多出来的要弄清是怎么回事）
 """
@@ -19,6 +20,7 @@ import decrypt80211 as dec  # noqa: E402
 import decrypt_oracle as d  # noqa: E402
 import fetch_samples  # noqa: E402
 import frames80211 as fr  # noqa: E402
+import groupkeys80211 as gk  # noqa: E402
 import handshake80211 as hs  # noqa: E402
 
 failures = []
@@ -31,12 +33,13 @@ def check(ok, msg):
 
 
 AEAD = ("CCMP", "GCMP")
-CATEGORIES = ("ok", "mgmt", "no_hs", "stale", "ours_only")
+CATEGORIES = ("ok", "group", "mgmt", "no_hs", "stale", "ours_only")
 
 
 def classify(path, keys):
     frames = list(fr.iter_frames(path))
     done, _ = hs.track(frames, keys)
+    gkeys, gciph = gk.track_group(frames, done), gk.group_ciphers(frames, done)
     ts = d.tshark_plain(path, keys)
     out = collections.Counter()
     for f in frames:
@@ -52,8 +55,13 @@ def classify(path, keys):
                 out["mgmt"] += 1
             continue
         if not cand:
-            if theirs is not None:
+            g = gk.decrypt_group(gkeys, gciph, f)
+            if g is not None and theirs is not None and g[1] == theirs["plain"]:
+                out["group"] += 1
+            elif theirs is not None:
                 out["no_hs"] += 1
+            elif g is not None:
+                out["ours_only"] += 1
             continue
         got = dec.decrypt_frame(done, f)
         if theirs is None:
@@ -67,30 +75,30 @@ def classify(path, keys):
 
 
 EXPECTED = {
-    "owe-3-dh-groups.pcapng.gz": (1, 0, 0, 0, 2),
-    "owe.pcapng.gz": (5, 0, 5, 0, 0),
-    "wep.pcapng.gz": (0, 0, 0, 0, 0),
-    "wpa-Induction.pcap.gz": (203, 0, 0, 0, 0),
-    "wpa-ccmp-256.pcapng.gz": (8, 0, 6, 0, 0),
-    "wpa-eap-tls.pcap.gz": (59, 0, 2, 0, 0),
-    "wpa-gcmp-256.pcapng.gz": (8, 0, 5, 0, 0),
-    "wpa-gcmp.pcapng.gz": (9, 0, 6, 0, 0),
-    "wpa-mlo-ccmp.pcapng.gz": (0, 0, 0, 0, 0),
-    "wpa-test-decode-mgmt.pcap.gz": (0, 3, 0, 0, 0),
-    "wpa-test-decode-tdls.pcap.gz": (6, 0, 2, 0, 0),
-    "wpa-test-decode.pcap.gz": (716, 0, 40, 0, 0),
-    "wpa1-gtk-rekey.pcapng.gz": (0, 0, 0, 0, 0),
-    "wpa2-ft-eap.pcapng.gz": (0, 0, 4, 0, 0),
-    "wpa2-ft-psk.pcapng.gz": (0, 0, 17, 0, 0),
-    "wpa2-psk-ccmp-tkip.pcapng.gz": (8, 0, 0, 0, 0),
-    "wpa2-psk-mfp.pcapng.gz": (7, 0, 2, 0, 0),
-    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (0, 0, 0, 0, 0),
-    "wpa3-ft-sae-h2e.pcapng.gz": (0, 0, 10, 0, 0),
-    "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0),
-    "wpa3-sae-ext-key-group21.pcapng.gz": (0, 0, 0, 0, 1),
-    "wpa3-sae.pcapng.gz": (6, 0, 4, 0, 0),
-    "wpa3-suiteb-192.pcapng.gz": (0, 3, 0, 0, 0),
-    "wpa_ptk_extended_key_id.pcap.gz": (19, 0, 12, 0, 0),
+    "owe-3-dh-groups.pcapng.gz": (1, 0, 0, 0, 0, 2),
+    "owe.pcapng.gz": (5, 5, 0, 0, 0, 0),
+    "wep.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa-Induction.pcap.gz": (203, 0, 0, 0, 0, 0),
+    "wpa-ccmp-256.pcapng.gz": (8, 6, 0, 0, 0, 0),
+    "wpa-eap-tls.pcap.gz": (59, 2, 0, 0, 0, 0),
+    "wpa-gcmp-256.pcapng.gz": (8, 5, 0, 0, 0, 0),
+    "wpa-gcmp.pcapng.gz": (9, 6, 0, 0, 0, 0),
+    "wpa-mlo-ccmp.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa-test-decode-mgmt.pcap.gz": (0, 0, 3, 0, 0, 0),
+    "wpa-test-decode-tdls.pcap.gz": (6, 0, 0, 2, 0, 0),
+    "wpa-test-decode.pcap.gz": (716, 40, 0, 0, 0, 0),
+    "wpa1-gtk-rekey.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa2-ft-eap.pcapng.gz": (0, 0, 0, 4, 0, 0),
+    "wpa2-ft-psk.pcapng.gz": (0, 0, 0, 17, 0, 0),
+    "wpa2-psk-ccmp-tkip.pcapng.gz": (8, 0, 0, 0, 0, 0),
+    "wpa2-psk-mfp.pcapng.gz": (7, 2, 0, 0, 0, 0),
+    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa3-ft-sae-h2e.pcapng.gz": (0, 0, 0, 10, 0, 0),
+    "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa3-sae-ext-key-group21.pcapng.gz": (0, 0, 0, 0, 0, 2),
+    "wpa3-sae.pcapng.gz": (6, 4, 0, 0, 0, 0),
+    "wpa3-suiteb-192.pcapng.gz": (0, 0, 3, 0, 0, 0),
+    "wpa_ptk_extended_key_id.pcap.gz": (19, 12, 0, 0, 0, 0),
 }
 
 if __name__ == "__main__":
@@ -102,6 +110,6 @@ if __name__ == "__main__":
         totals = [a + b for a, b in zip(totals, got)]
         check(got == EXPECTED[name], "%s：%s（表里 %s）" % (name, dict(zip(CATEGORIES, got)), dict(zip(CATEGORIES, EXPECTED[name]))))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
-    check(totals[0] == 1055 and totals[4] == 3, "共 %d 帧与 tshark 的明文逐字节相同；tshark 解不了而我们解开的 %d 帧（64 字节 PMK）" % (totals[0], totals[4]))
+    check(totals[0] == 1055 and totals[1] == 82 and totals[5] == 4, "共 %d 帧单播 + %d 帧组播与 tshark 的明文逐字节相同；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[5]))
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

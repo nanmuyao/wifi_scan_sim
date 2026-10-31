@@ -271,6 +271,19 @@ AAD = 帧控制（第 1 字节只留 `& 0x8F`；第 2 字节清掉重试 / 省�
 tshark 多出来的 KCK / KEK / TK 在这三个样例里归零（剩下的只有 FT 和 TDLS）。数据帧：与 tshark 明文逐字节相同的 AEAD 帧 549 -> 1055，stale 506 -> 0。
 **踩到的坑**：重新握手的 M2 也带 Secure 位（密钥装过了），按 Key Info 的老规则会被当成 M4——M2 带 SNonce 和 Key Data（RSN 元素），M4 的 Key Data 为空，分类加上这一条（与 tshark 对 109 个 EAPOL 的消息号仍一致）。
 变异检查：分类条件、"受保护帧才去解密"的接线被抓住；有两个等价改动没被抓：去掉 `any(nonce)`（后面一行的兜底使结果相同），以及"解出来是不是 LLC / EAPOL"的检查（非 EAPOL 的明文交给 eapol.parse 也得 None）。
+
+### 组密钥：GTK / IGTK 与组播帧（D4c-3）
+`groupkeys80211.py`：M3 和组密钥握手（G1）的 Key Data 用 KEK 保护（版本 1 = RC4 丢 256 字节，其余 = AES 密钥包装；WPA1 的 G1 总是 RC4）。
+先用 KCK 验 M3 / G1 的 MIC，再让 KEK 过一遍密钥包装的完整性校验（A6A6… 头）——**能解出来本身就是自证**；然后解析 KDE（GTK 类型 1、IGTK 类型 9，跳过 RSN 元素和填充）。
+组密码套件取自信标 / 探测响应的 RSN（WPA1 是厂商）元素，没有信标的抓包（wpa-eap-tls）退而用关联请求里的，再没有就猜成成对套件（猜错了 MIC 过不去，不会解出假明文）；组播帧按帧头里的密钥序号找 GTK，装上时间在帧之前的从新到旧试，MIC 决定。
+**结果**：24 个样例共解出 34 个组密钥（M3 与 G1 合计，含同一 GTK 在多个握手里重复出现），tshark 打出的 GTK 有 12 个与我们的相同（`tests/oracle/test_groupkeys_oracle.py` 逐样例固定）。
+组播 / 广播数据帧 82 帧与 tshark 的明文逐字节相同（`group` 一列），此外 tshark 解不了而我们解开的 4 帧（64 字节 PMK 的单播 3 帧 + 组播 1 帧）。
+**我们有而 tshark 没有**：64 字节 PMK 的握手（owe-3-dh-groups、wpa3-sae-ext-key-group21，tshark 4.4 加载不了）、Suite-B 192 与 PMF 的 IGTK、
+wpa-eap-tls 里加密重新握手中的 G1（tshark 不跟踪）——它们只有 MIC + 密钥包装的自证。
+**我们没有而 tshark 有**：FT 的 GTK（阶段 E），以及 wpa1-gtk-rekey 的 3 个：WPA1 的 G1 在 TKIP 加密的数据帧里，等 TKIP 解密做完（下一小步）。
+还有 10 帧组播属于 FT 样例；wpa-mlo-ccmp 与 wpa3-mlo 没有解出组密钥（多链路的 GTK 在另一种 KDE 里，tshark 也没有打出），留着。
+**测试**：`tests/test_groupkeys.py` 手拼 KDE、用 `aes_key_wrap` / RC4 独立包装，并用 pycryptodome 加密组播帧；20 处变异检查，起初 7 个存活（取第一个 GTK、填充之后停读、密钥序号 / 时间 / AP 的筛选、ToDS+FromDS、组地址位），
+补用例后全部抓住——其中组地址位这一条是用例里"单播"地址 0x11 的最低位其实是 1，帮我发现了测试自己的错；唯一没抓住的是 `x.anonce == e["nonce"]`（它只是少试几个握手的优化，MIC 不对照样过不去）。
 TKIP、WEP 与 TKIP 变异体的击杀是下一小步。
 
 ### 阶段 D：加密与密钥层（逐个套件）

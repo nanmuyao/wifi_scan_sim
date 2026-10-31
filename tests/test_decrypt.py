@@ -3,16 +3,14 @@
 """decrypt80211 的 CCMP / GCMP：用 pycryptodome 当独立加密方（AAD 在这里手写一遍，不借用被测代码），
 覆盖真实样例里没有的帧形态（非 QoS、四地址、带 HT 控制、各种会被屏蔽的位）。真实帧的对照在 tests/oracle/test_decrypt_diff.py。"""
 import os
-import struct
 import sys
-
-from Crypto.Cipher import AES
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "tests"))
 import decrypt80211 as dec  # noqa: E402
-import frames80211 as fr  # noqa: E402
 import wifi_frame_parser as w  # noqa: E402
+from aead_build import A1, A2, A3, A4, build, frame  # noqa: E402,F401
 
 failures = []
 
@@ -21,45 +19,6 @@ def check(ok, msg):
     print("  [%s] %s" % ("PASS" if ok else "FAIL", msg))
     if not ok:
         failures.append(msg)
-
-
-A1, A2, A3, A4 = (bytes([i] * 6) for i in (0x11, 0x22, 0x33, 0x44))
-MAC = lambda b: ":".join("%02x" % x for x in b)  # noqa: E731
-
-
-def build(cipher, tk, pn, plain, *, qos=None, to_ds=1, from_ds=0, four=False, htc=False, flags=0, seq=0x0123, frag=0, key_id=0, subtype=None):
-    """返回完整 802.11 帧。flags：重试 0x08 / 省电 0x10 / 更多数据 0x20（这些位 AAD 里是 0，加密时不算）。
-    AAD 按标准手写：帧控制第 2 字节只留 ToDS / FromDS / 更多分片 / 受保护（0x47），第 1 字节只留 0x8F。"""
-    if subtype is None:
-        subtype = 8 if qos is not None else 0
-    fc0 = 0x08 | subtype << 4
-    ds = to_ds | from_ds << 1
-    fc1 = ds | 0x40 | flags | (0x80 if htc else 0)
-    hdr = bytes([fc0, fc1]) + struct.pack("<H", 0) + A1 + A2 + A3 + struct.pack("<H", seq << 4 | frag)
-    aad = bytes([fc0 & 0x8F, (ds | 0x40)]) + A1 + A2 + A3 + struct.pack("<H", frag)
-    if four:
-        hdr = bytes([fc0, fc1 | 0x03]) + hdr[2:] + A4
-        aad = bytes([fc0 & 0x8F, 0x03 | 0x40]) + A1 + A2 + A3 + struct.pack("<H", frag) + A4
-    if qos is not None:
-        hdr += struct.pack("<H", qos)
-        aad += struct.pack("<H", qos & 0x000F)
-    if htc:
-        hdr += b"\x01\x02\x03\x04"
-    ph = bytes([pn & 0xFF, (pn >> 8) & 0xFF, 0, 0x20 | key_id << 6]) + (pn >> 16).to_bytes(4, "little")
-    if cipher.startswith("CCMP"):
-        tid = (qos or 0) & 0x0F
-        nonce = bytes([tid]) + A2 + pn.to_bytes(6, "big")
-        c = AES.new(tk, AES.MODE_CCM, nonce=nonce, mac_len=dec.MIC_LEN[cipher], msg_len=len(plain))
-    else:
-        c = AES.new(tk, AES.MODE_GCM, nonce=A2 + pn.to_bytes(6, "big"), mac_len=16)
-    c.update(aad)
-    ct, tag = c.encrypt_and_digest(plain)
-    return hdr + ph + ct + tag
-
-
-def frame(dot11):
-    h = w.parse_mac_header(dot11)
-    return fr.Frame(1, 0.0, dot11, h, dot11[h["header_len"]:], None)
 
 
 PLAIN = b"\xaa\xaa\x03\x00\x00\x00\x08\x00" + bytes(range(40))
