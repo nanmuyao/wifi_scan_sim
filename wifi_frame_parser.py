@@ -431,6 +431,7 @@ def parse_ctrl_short(buf):
     f = parse_frame_control(fc)
     # Frame Control 的标志位在所有帧里都有，控制帧也不例外
     info = {k: f[k] for k in ("to_ds", "from_ds", "more_frag", "retry", "pwr_mgmt", "more_data", "protected", "order")}
+    info["duration"] = struct.unpack("<H", buf[2:4])[0] if len(buf) >= 4 else None
     if f["subtype"] in (12, 13, 7):               # CTS / ACK / Control Wrapper：只有 RA
         if len(buf) >= 10:
             info["ra"] = mac_str(buf[4:10])
@@ -471,8 +472,8 @@ def parse_pcap_file(path):
             else:
                 h = parse_mac_header(dot11)
                 rec.update({k: h[k] for k in (
-                    "addr1", "addr2", "addr3", "seq_num", "protected", "to_ds", "from_ds",
-                    "retry", "pwr_mgmt")})
+                    "addr1", "addr2", "addr3", "seq_num", "frag_num", "duration", "protected",
+                    "to_ds", "from_ds", "retry", "pwr_mgmt", "more_frag", "more_data", "order")})
                 body = dot11[24:]
                 if fam == "Management":
                     m = parse_mgmt_frame(h, body)

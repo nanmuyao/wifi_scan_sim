@@ -27,6 +27,12 @@ FIELDS = [
     ("protected", "wlan.fc.protected"),
     ("tods", "wlan.fc.tods"),
     ("fromds", "wlan.fc.fromds"),
+    ("duration", "wlan.duration"),
+    ("frag", "wlan.frag"),
+    ("morefrag", "wlan.fc.frag"),
+    ("pwrmgt", "wlan.fc.pwrmgt"),
+    ("moredata", "wlan.fc.moredata"),
+    ("order", "wlan.fc.order"),
 ]
 TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number")]
 TSHARK_MAJOR_MINOR = "4.4"
@@ -43,9 +49,9 @@ def _norm(name, v):
         return None
     if name == "type_subtype":
         return int(v, 16)
-    if name == "seq":
+    if name in ("seq", "duration", "frag"):
         return int(v)
-    if name in ("retry", "protected", "tods", "fromds"):
+    if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order"):
         return v == "True"
     return v
 
@@ -94,6 +100,12 @@ def ours_frames(path):
             "protected": None if "protected" not in r else bool(r["protected"]),
             "tods": None if "to_ds" not in r else bool(r["to_ds"]),
             "fromds": None if "from_ds" not in r else bool(r["from_ds"]),
+            "duration": r.get("duration"),
+            "frag": r.get("frag_num"),
+            "morefrag": None if "more_frag" not in r else bool(r["more_frag"]),
+            "pwrmgt": None if "pwr_mgmt" not in r else bool(r["pwr_mgmt"]),
+            "moredata": None if "more_data" not in r else bool(r["more_data"]),
+            "order": None if "order" not in r else bool(r["order"]),
         })
     return out
 
