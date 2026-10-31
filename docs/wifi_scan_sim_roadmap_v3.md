@@ -391,6 +391,24 @@ SAE 的 confirm 要用 KCK，同样验不了。OWE 的 M1 / M2 / 关联帧里也
 - 这一阶段密码学最重，椭圆曲线先用 Python 整数手写（学习为目的，不求速度），并与 pycryptodome 的结果交叉验证。
 - 验收：`wpa3-sae`、`wpa3-sae-ext-key-group21`、`wpa3-ft-sae-h2e`、`owe*`、`wpa2-ft-*`、`wpa3-suiteb-192` 在给定 PMK 的前提下推导的 TK / GTK 与测试套件一致。SAE 的口令 → PMK 另需标准测试向量或自家抓包（见第 2 节）。
 
+### 多链路（MLO）与 Wireshark 公布的答案（G-MLO）
+**Wireshark 自己公布的答案**（`tests/oracle/test_published_keys.py`）：它的测试套件对每个样例用 `wlan.analysis.tk == …` / `wlan.analysis.gtk == …` 过滤，这些值就是作者认定的 TK 和 GTK，
+而且不依赖我们装的 tshark 版本（tshark 4.4 解不开的 FT 漫游、多链路、48 / 64 字节 PMK 样例也有）。**21 个公布的 TK 和 20 个公布的 GTK，全部被我们推出来**——包括 FT 漫游后的 TK、
+wpa3-mlo 的 1 个 TK 和 4 个 GTK、wpa3-ft-sae-ext-key-group20 的 SHA-384 密钥。（wpa-mlo-ccmp 的 TK 是用户直接给的，算已知输入。）
+**多链路 M3 / G1 的 Key Data**：链路 KDE（0x13）给出链路 ID 对应的 AP 链路 MAC；MLO GTK KDE（0x10）= 密钥序号 / Tx / 链路 ID（高 4 位）‖ RSC(6) ‖ GTK；
+MLO IGTK（0x11）/ BIGTK（0x12）KDE = 密钥序号(2) ‖ IPN(6) ‖ 链路 ID（高 4 位）‖ 密钥。只有 M3 带链路 KDE，G1 靠调用方记下的链路表（`mlo_keys(links=…)`）。
+**地址规则（由 wpa3-mlo 的真实帧确定，只有这样 MIC 才通过）**：多链路设备之间的**单播**帧，CCMP 的 nonce 里的 A2 和 AAD 里的 A1 / A2 / A3 / A4 都换成 **MLD 地址**（帧头里是链路地址）；
+**组播**帧用每条链路自己的 GTK，地址保持链路地址。EAPOL 的配对同样要把链路地址换成 MLD 地址。
+**结果**：wpa3-mlo 的 8 个受保护数据帧全部解开（4 个单播、4 个组播，其中 2 个是加密的 G1 / G2 EAPOL），ICMPv6 校验和全部吻合；组密钥 41 -> 48 个（含 IGTK / BIGTK 条目），
+tshark 4.4 对这个样例没有任何答案，解出的帧 14 -> 22（靠 CCMP 的 MIC、校验和、Wireshark 公布的值）。
+**用户直接给 TK**（密钥表里的 `tk` 项）：`decrypt_user_tk` 按 TK 长度试套件，MIC 决定；对照 tshark 的 5 个样例（4 个单 TK 样例 + wpa-mlo-ccmp）帧号与明文逐字节相同。
+wpa-mlo-ccmp 的 4 个多链路数据帧 tshark 和我们都解不开：抓包里没有关联帧，拿不到 MLD 地址；只有受保护的解除认证帧（管理帧用链路地址）两边都解得开。
+**BIP 的补充**：之前只信「装上时间在帧之前」的密钥；信标常常比关联早抓到，所以改成先试之前的、再试之后的，MIC 吻合就是 ok；不知道组管理套件时按 MIC 和密钥长度推。
+**没解决的**：wpa3-mlo 的 2 个信标用 BIGTK（密钥序号 6）保护，我试了 BIP-CMAC-128 在帧控制屏蔽、时间戳清零、MIC 清零或去掉、IPN 前缀等组合，用每一把解出的 IGTK / BIGTK 都对不上——
+信标保护的 MIC 范围规则没弄清，结果标成 `unsupported`，不假装验证了。
+**测试**：`tests/aead_build.py` 的独立构造支持 MLD 地址；`tests/test_decrypt.py`（MLD 映射的各种缺项、user TK）、`tests/test_groupkeys.py`（`mlo_keys`）；
+对这批代码的 34 个改动做变异检查，起初 4 个存活：3 个补用例后抓住（链路 ID 占 4 位、6 字节的链路 KDE、管理帧不用 MLD 表），1 个等价（`_infer_bip` 里按 MIC 长度过滤——长度不对的套件验证本来就会失败）。
+
 ### 阶段 F：解密之后的内容（已完成）
 - 解密后只做到能验证“解对了”：LLC/SNAP → ARP / IPv4 / IPv6 / UDP / TCP / ICMP / ICMPv6 / DHCP 的最小解析（`net80211.py`），以及把前面各层接起来的 `pipeline80211.decrypt_capture`
   （握手 + 重新握手 + FT 漫游 → PTK，M3 / G1 / FT 响应 → GTK，WEP 密钥；逐帧试 WEP / 单播 / 组播；A-MSDU 拆开）。不做 TLS 等更上层的内容。

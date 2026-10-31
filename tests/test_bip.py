@@ -93,14 +93,23 @@ check(gk.verify_bip([K(10, 4, igtk)], MC, fm) == "ok", "密钥序号对、装上
 check(gk.verify_bip([K(10, 4, bytes(32)), K(20, 4, igtk)], MC, fm) == "ok" and gk.verify_bip([K(10, 4, igtk), K(20, 4, bytes(32))], MC, fm) == "ok", "多把同序号的 IGTK：试到吻合的")
 check(gk.verify_bip([K(10, 4, bytes(32))], MC, fm) == "bad", "有 IGTK 但不吻合：bad")
 check(gk.verify_bip([K(10, 5, igtk)], MC, fm) == "no_igtk", "密钥序号不对：no_igtk")
-check(gk.verify_bip([K(60, 4, igtk)], MC, fm) == "no_igtk", "IGTK 装上得比帧晚：no_igtk")
+check(gk.verify_bip([K(60, 4, igtk)], MC, fm) == "ok" and gk.verify_bip([K(60, 4, bytes(32))], MC, fm) == "bad", "IGTK 装上得比帧晚（信标比关联早抓到）：照样试，吻合就是 ok，不吻合是 bad")
+check(gk.verify_bip([K(60, 4, bytes(32)), K(10, 4, igtk)], MC, fm) == "ok" and gk.verify_bip([K(20, 4, bytes(32)), K(60, 4, igtk)], MC, fm) == "ok", "先试早装上的、再试晚装上的：两类密钥里有一把吻合就行")
 check(gk.verify_bip([K(10, 4, igtk, ap="aa:bb:cc:dd:ee:ff")], MC, fm) == "no_igtk", "IGTK 属于别的 AP：no_igtk")
-check(gk.verify_bip([K(10, 4, igtk)], {}, fm) == "no_igtk", "不知道组管理套件：no_igtk")
+check(gk.verify_bip([K(10, 4, igtk)], {}, fm) == "ok", "不知道组管理套件：按 MIC 16 字节 + 密钥 32 字节推出 GMAC-256 / CMAC-256 两个，GMAC-256 吻合")
+check(gk.verify_bip([K(10, 4, bytes(20))], {}, fm) == "no_igtk", "不知道套件而且密钥长度对不上任何一个套件：没有可试的，no_igtk")
 check(gk.verify_bip([gk.GroupKey(10, APS, 1, True, bytes(16), None, "M3")], MC, fm) == "no_igtk", "这把组密钥没带 IGTK：no_igtk")
-check(gk.verify_bip([K(10, 4, igtk)], MC, fm._replace(n=10)) == "no_igtk", "帧号等于密钥帧号：还没装上，no_igtk")
+check(gk.verify_bip([K(10, 4, igtk)], MC, fm._replace(n=10)) == "ok", "帧号等于密钥帧号：算「不早于」，排在后一类里试，吻合就是 ok")
 prot = fm.dot11[:1] + bytes([fm.dot11[1] | 0x40]) + fm.dot11[2:]
 check(gk.verify_bip([K(10, 4, igtk)], MC, fm._replace(h=w.parse_mac_header(prot))) is None, "受保护位置位的管理帧（CCMP 加密的）不走 BIP：None")
 check(gk.verify_bip([K(10, 4, igtk)], MC, fm._replace(h=dict(fm.h, type=2))) is None, "不是管理帧：None")
+
+print("== BIGTK（密钥序号 6 / 7）：不判 ==")
+fb = deauth("BIP-GMAC-256", igtk)
+for kid in (6, 7):
+    f6 = deauth("BIP-GMAC-256", igtk, key_id=kid)._replace(n=50)
+    check(gk.verify_bip([K(10, kid, igtk)], MC, f6) == "unsupported", "MME 的密钥序号 %d 是 BIGTK：unsupported（信标保护的规则没确定，不下结论）" % kid)
+check(gk.verify_bip([K(10, 5, igtk)], MC, deauth("BIP-GMAC-256", igtk, key_id=5)._replace(n=50)) == "ok", "密钥序号 5（IGTK）照常判")
 
 print("== group_mgmt_ciphers ==")
 WFA = b"\x00\x0f\xac"

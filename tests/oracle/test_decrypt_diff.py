@@ -42,6 +42,7 @@ def classify(path, keys):
     done, _ = hs.track(frames, keys)
     gkeys, gciph = gk.track_group(frames, done), gk.group_ciphers(frames, done)
     wkeys = dec.wep_keys(keys)
+    mld = hs.mld_addresses(frames)
     ts = d.tshark_plain(path, keys)
     out = collections.Counter()
     for f in frames:
@@ -57,7 +58,7 @@ def classify(path, keys):
             else:
                 out["wep" if wep is not None and wep[0] == theirs["plain"] else "stale"] += 1
             continue
-        pair = {f.h["addr1"], f.h["addr2"]}
+        pair = {mld.get(f.h["addr1"], f.h["addr1"]), mld.get(f.h["addr2"], f.h["addr2"])}
         if not [x for x in done if {x.ap, x.sta} == pair and x.frames["m2"] < f.n]:
             g = gk.decrypt_group(gkeys, gciph, f)
             if g is not None and theirs is not None and g[1] == theirs["plain"]:
@@ -67,7 +68,7 @@ def classify(path, keys):
             elif g is not None:
                 out["ours_only"] += 1
             continue
-        got = dec.decrypt_frame(done, f)
+        got = dec.decrypt_frame(done, f, mld)
         if theirs is None:
             if got is not None:
                 out["ours_only"] += 1
@@ -98,7 +99,7 @@ EXPECTED = {
     "wpa2-psk-mfp.pcapng.gz": (7, 2, 0, 0, 0, 0, 0),
     "wpa3-ft-sae-ext-key-group20.pcapng.gz": (0, 0, 0, 0, 0, 0, 4),
     "wpa3-ft-sae-h2e.pcapng.gz": (6, 4, 0, 0, 0, 0, 6),
-    "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0, 0, 0),
+    "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0, 0, 8),
     "wpa3-sae-ext-key-group21.pcapng.gz": (0, 0, 0, 0, 0, 0, 2),
     "wpa3-sae.pcapng.gz": (6, 4, 0, 0, 0, 0, 0),
     "wpa3-suiteb-192.pcapng.gz": (0, 0, 3, 0, 0, 0, 0),
@@ -114,6 +115,6 @@ if __name__ == "__main__":
         totals = [a + b for a, b in zip(totals, got)]
         check(got == EXPECTED[name], "%s：%s（表里 %s）" % (name, dict(zip(CATEGORIES, got)), dict(zip(CATEGORIES, EXPECTED[name]))))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
-    check(totals[0] == 1092 and totals[1] == 175 and totals[2] == 6 and totals[3] == 11 and totals[5] == 0 and totals[6] == 14, "与 tshark 明文逐字节相同：单播 %d 帧、组播 %d 帧、受保护管理帧 %d 帧、WEP %d 帧；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[2], totals[3], totals[6]))
+    check(totals[0] == 1092 and totals[1] == 175 and totals[2] == 6 and totals[3] == 11 and totals[5] == 0 and totals[6] == 22, "与 tshark 明文逐字节相同：单播 %d 帧、组播 %d 帧、受保护管理帧 %d 帧、WEP %d 帧；tshark 解不了而我们解开的 %d 帧" % (totals[0], totals[1], totals[2], totals[3], totals[6]))
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

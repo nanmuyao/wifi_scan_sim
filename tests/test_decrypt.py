@@ -170,6 +170,45 @@ try:
 except ValueError:
     check(True, "帧体太短：ValueError")
 
+print("== 多链路（MLD 地址）：单播帧的 AAD 与 nonce 用 MLD 地址 ==")
+from collections import namedtuple  # noqa: E402
+MLD_AP, MLD_STA = bytes([0x0a] * 5 + [1]), bytes([0x0b] * 5 + [2])
+BMAP = {A1: MLD_AP, A2: MLD_STA, A4: bytes([0x0c] * 6)}                          # 构造用（字节 -> 字节）
+SMAP = {":".join("%02x" % b for b in k): ":".join("%02x" % b for b in v) for k, v in BMAP.items()}      # 被测代码用（字符串 -> 字符串）
+for cipher, tk, kw in (("CCMP-128", TK16, dict(qos=0x0003)), ("CCMP-256", TK32, dict(qos=0x0000, four=True)), ("GCMP-128", TK16, dict(qos=0x0005)), ("GCMP-256", TK32, dict(qos=0x0000, four=True))):
+    f = frame(build(cipher, tk, PN, PLAIN, mld=BMAP, **kw))
+    pt, ok, _pn = dec.decrypt_aead(tk, cipher, f, SMAP)
+    check(ok and pt == PLAIN, "%s%s：A1 / A2 / A3 / A4 换成 MLD 地址，nonce 的 A2 也是 MLD 地址：MIC 通过" % (cipher, "（四地址）" if kw.get("four") else ""))
+    check(not dec.decrypt_aead(tk, cipher, f)[1], "%s：不给 MLD 表（按帧头里的链路地址）：MIC 失败" % cipher)
+    check(not dec.decrypt_aead(tk, cipher, f, {k: v for k, v in SMAP.items() if k != ":".join("%02x" % b for b in A2)})[1], "%s：表里缺 A2：MIC 失败（nonce 和 AAD 都要换）" % cipher)
+f = frame(build("CCMP-128", TK16, PN, PLAIN, mld=BMAP, qos=0x0001))
+check(not dec.decrypt_aead(TK16, "CCMP-128", f, {k: v for k, v in SMAP.items() if k != ":".join("%02x" % b for b in A1)})[1], "表里缺 A1：MIC 失败")
+check(dec.decrypt_aead(TK16, "CCMP-128", f, dict(SMAP, **{"99:99:99:99:99:99": "88:88:88:88:88:88"}))[1], "表里多出不相干的条目：不影响")
+check(dec._link_to_mld(SMAP, A1) == MLD_AP and dec._link_to_mld(SMAP, A3) == A3 and dec._link_to_mld(None, A1) == A1 and dec._link_to_mld({}, A1) == A1, "_link_to_mld：在表里换成 MLD 地址，不在表里 / 没有表原样")
+check(dec.aad_of(f.dot11, f.h, SMAP) != dec.aad_of(f.dot11, f.h) and dec.aad_of(f.dot11, f.h, SMAP)[2:8] == MLD_AP, "aad_of：给了表，A1 换成了 MLD 地址")
+HS = namedtuple("HS", "ap sta cipher tk frames")
+mhs = HS(":".join("%02x" % b for b in MLD_AP), ":".join("%02x" % b for b in MLD_STA), "CCMP-128", TK16, {"m2": 1})
+ff = frame(build("CCMP-128", TK16, PN, PLAIN, mld=BMAP, qos=0x0000))._replace(n=5)
+got = dec.decrypt_frame([mhs], ff, SMAP)
+check(got is not None and got[1] == PLAIN, "decrypt_frame：帧头里是链路地址，握手记的是 MLD 地址，靠表配对并解开")
+check(dec.decrypt_frame([mhs], ff) is None, "不给表：配不上对（链路地址 != MLD 地址），解不开")
+
+print("== 用户给的 TK ==")
+check(dec.user_tks([("tk", TK16.hex()), ("tk", TK32.hex()), ("tk", "00" * 24), ("tk", "zz"), ("wpa-psk", TK16.hex()), ("tk", "")]) == [TK16, TK32], "只收 16 / 32 字节的十六进制 tk 项")
+d_, ok_ = None, None
+for cipher, tk in (("CCMP-128", TK16), ("GCMP-128", TK16), ("CCMP-256", TK32), ("GCMP-256", TK32)):
+    r = dec.decrypt_user_tk([bytes(16), tk], frame(build(cipher, tk, PN, PLAIN, qos=0x0002)))
+    check(r is not None and r[0] == PLAIN and r[1] == tk and r[2] == cipher, "%s：多把 TK 里逐把试，按长度和 MIC 定套件" % cipher)
+rm = dec.decrypt_user_tk([TK16], frame(build("CCMP-128", TK16, PN, MPL, mgmt=True, subtype=12, a1=A1)))
+check(rm is not None and rm[0] == MPL and rm[2] == "CCMP-128", "受保护的管理帧（解除认证）：用链路地址即可解开")
+check(dec.decrypt_user_tk([TK16], frame(build("CCMP-128", TK16, PN, MPL, mgmt=True, subtype=12, a1=A1)), SMAP) is not None, "管理帧即使给了 MLD 表也用链路地址（MLD 地址只用于数据帧）")
+check(dec.decrypt_user_tk([bytes(16)], frame(build("CCMP-128", TK16, PN, PLAIN, qos=0x0002))) is None and dec.decrypt_user_tk([], frame(build("CCMP-128", TK16, PN, PLAIN))) is None, "TK 不对 / 没有 TK：None")
+unprot = frame(build("CCMP-128", TK16, PN, PLAIN, qos=0x0002))
+check(dec.decrypt_user_tk([TK16], unprot._replace(h=dict(unprot.h, protected=0))) is None and dec.decrypt_user_tk([TK16], unprot._replace(h=dict(unprot.h, type=1))) is None, "未受保护 / 控制帧：None")
+fm = frame(build("CCMP-128", TK16, PN, PLAIN, mld=BMAP, qos=0x0002))
+check(dec.decrypt_user_tk([TK16], fm) is None and dec.decrypt_user_tk([TK16], fm, SMAP) is not None, "多链路的数据帧：要给 MLD 表才解得开（抓包里没有关联帧就解不开）")
+check(dec.decrypt_user_tk([TK32[:16] + bytes(16)], frame(build("CCMP-256", TK32, PN, PLAIN, qos=0))) is None, "32 字节但不是这把：None")
+
 print("== pn_of ==")
 check(dec.pn_of(bytes([1, 2, 0, 0x20, 3, 4, 5, 6])) == (0x060504030201, 0, True), "PN0 PN1 在前、PN2-PN5 在后，ExtIV 位")
 check(dec.pn_of(bytes([0, 0, 0, 0xE0, 0, 0, 0, 0]))[1] == 3, "密钥序号取最高 2 位")

@@ -165,9 +165,9 @@ def _mac(s):
     return bytes.fromhex(s.replace(":", ""))
 
 
-def _decrypted_eapol(done, f):
+def _decrypted_eapol(done, f, mld=None):
     """重新握手的 EAPOL 报文在数据帧里被当前的 PTK 加密：用已推出的握手解开，是 EAPOL 就返回报文。"""
-    got = dec.decrypt_frame(done, f)
+    got = dec.decrypt_frame(done, f, mld)
     if got is None:
         return None
     pt = got[1]
@@ -193,7 +193,7 @@ def track(frames, keys):
             continue
         raw = fr.eapol_payload(f)
         if raw is None and f.h["protected"]:
-            raw = _decrypted_eapol(done, f)
+            raw = _decrypted_eapol(done, f, mld)
         e = eapol.parse(raw) if raw is not None else None
         if e is None or "key_info" not in e or not e["key_info"]["pairwise"]:
             continue

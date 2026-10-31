@@ -40,7 +40,7 @@ def same(a, b):
 def summarize(path, keys, usable):
     frames = list(fr.iter_frames(path))
     done, _ = hs.track(frames, keys)
-    ours = gk.track_group(frames, done)
+    ours = [k for k in gk.track_group(frames, done) if k.gtk]          # 只数带 GTK 的（多链路里 IGTK / BIGTK 是单独的条目，gtk 为空）
     ts = tshark_gtks(path, usable)
     ours_hex = {k.gtk.hex() for k in ours}
     return (len(ours), sum(k.source == "M3" for k in ours), sum(k.source == "G1" for k in ours),
@@ -69,7 +69,7 @@ EXPECTED = {
     "wpa2-psk-mfp.pcapng.gz": (1, 1, 0, 1, 0, 0),
     "wpa3-ft-sae-ext-key-group20.pcapng.gz": (2, 1, 0, 0, 0, 2),
     "wpa3-ft-sae-h2e.pcapng.gz": (2, 1, 0, 1, 0, 0),
-    "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0, 0),
+    "wpa3-mlo.pcapng.gz": (4, 2, 2, 0, 0, 4),
     "wpa3-sae-ext-key-group21.pcapng.gz": (1, 1, 0, 0, 0, 1),
     "wpa3-sae.pcapng.gz": (1, 1, 0, 1, 0, 0),
     "wpa3-suiteb-192.pcapng.gz": (3, 3, 0, 0, 0, 1),
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         else:
             print('    "%s": %s,' % (name, got))
     if EXPECTED:
-        check(sum(v[0] for v in got_all.values()) == 44 and sum(v[3] for v in got_all.values()) == 19, "共解出 %d 个组密钥，%d 个 GTK 与 tshark 相同" % (sum(v[0] for v in got_all.values()), sum(v[3] for v in got_all.values())))
+        check(sum(v[0] for v in got_all.values()) == 48 and sum(v[3] for v in got_all.values()) == 19, "共解出 %d 个组密钥，%d 个 GTK 与 tshark 相同" % (sum(v[0] for v in got_all.values()), sum(v[3] for v in got_all.values())))
         check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
         print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
         sys.exit(0 if not failures else 1)

@@ -67,10 +67,37 @@ def keys_from_data(plain, e, ap, n, source):
     return GroupKey(n, ap, gtk[0], gtk[1], gtk[2], igtk, source)
 
 
+MLO_GTK, MLO_IGTK, MLO_BIGTK, MLO_LINK = 0x10, 0x11, 0x12, 0x13
+
+
+def mlo_keys(plain, n, source, links=None):
+    """多链路（802.11be）的 M3 / G1 Key Data：每条链路各有自己的组密钥。
+    链路 KDE（0x13）：链路 ID 在第 1 字节低 4 位，后面 6 字节是这条链路上 AP 的 MAC（也是组播帧的发送地址）。
+    MLO GTK KDE（0x10）：密钥序号 / Tx / 链路 ID（第 1 字节：bit0-1 序号、bit2 Tx、bit4-7 链路）‖ RSC(6) ‖ GTK。
+    MLO IGTK（0x11）/ BIGTK（0x12，保护信标）KDE：密钥序号(2，小端) ‖ IPN(6) ‖ 链路 ID（高 4 位）‖ 密钥。
+    links 是调用方保存的 {链路 ID: MAC}，本函数把这条消息里的链路 KDE 并进去再用；链路 ID 对不上的丢掉。IGTK / BIGTK 放在单独的 GroupKey 里（gtk 为空，key_id = -1，只有 igtk 有值），这样组播数据帧的解密不会误用它们。"""
+    kdes = parse_kdes(plain)
+    links = {} if links is None else links          # 链路 ID -> AP 的链路 MAC；只有 M3 带链路 KDE，之后的组密钥握手（G1）要用 M3 记下的
+    links.update({body[0] & 15: ":".join("%02x" % x for x in body[1:7]) for typ, body in kdes if typ == MLO_LINK and len(body) >= 7})
+    out = []
+    for typ, body in kdes:
+        if typ == MLO_GTK and len(body) >= 8 + 16 - 1:
+            ap = links.get(body[0] >> 4)
+            if ap is not None:
+                out.append(GroupKey(n, ap, body[0] & 3, bool(body[0] & 4), bytes(body[7:]), None, source))
+        elif typ in (MLO_IGTK, MLO_BIGTK) and len(body) >= 9 + 16:
+            ap = links.get(body[8] >> 4)
+            if ap is not None:
+                out.append(GroupKey(n, ap, -1, False, b"", (body[0] | body[1] << 8, bytes(body[2:8]), bytes(body[9:])), source))
+    return out
+
+
 def track_group(frames, done):
     """frames：iter_frames 的结果；done：handshake80211.track 推出的握手。返回 [GroupKey]。
     M3 按 ANonce 找到它属于哪个握手，G1 在这对地址的握手里从新到旧试；两者都先用 KCK 验 MIC，再用 KEK 解 Key Data。"""
     out = []
+    mld = hs.mld_addresses(frames)
+    link_maps = {}                       # AP（MLD 地址）-> {链路 ID: 链路 MAC}
     for f in frames:
         if f.h["type"] == 0 and f.h["subtype"] == 3 and not f.h["protected"]:        # 重关联响应：FT 漫游后新 AP 的组密钥在 FTE 的子元素里
             gk = _ft_group_key(f, done)
@@ -79,14 +106,14 @@ def track_group(frames, done):
             continue
         raw = fr.eapol_payload(f)
         if raw is None and f.h["protected"]:
-            raw = hs._decrypted_eapol(done, f)
+            raw = hs._decrypted_eapol(done, f, mld)
         e = eapol.parse(raw) if raw is not None else None
         if e is None or "key_info" not in e:
             continue
         msg = e.get("message")
         if msg not in (3, "G1") or (msg == 3 and e["descriptor"] == 254):     # WPA1 的 M3 里没有 GTK，GTK 在后面的 G1 里
             continue
-        pair = {f.h["sa"], f.h["da"]}
+        pair = {mld.get(f.h["sa"], f.h["sa"]), mld.get(f.h["da"], f.h["da"])}
         cands = sorted((x for x in done if {x.ap, x.sta} == pair and x.frames["m2"] < f.n), key=lambda x: -x.frames["m2"])
         if msg == 3:
             cands = [x for x in cands if x.anonce == e["nonce"]]
@@ -101,6 +128,7 @@ def track_group(frames, done):
             gk = keys_from_data(plain, e2, f.h["sa"], f.n, "M3" if msg == 3 else "G1")
             if gk is not None:
                 out.append(gk)
+            out.extend(mlo_keys(plain, f.n, "M3" if msg == 3 else "G1", link_maps.setdefault(x.ap, {})))
             break
     return out
 
@@ -164,18 +192,35 @@ def group_mgmt_ciphers(frames):
     return _rsn_field(frames, "group_mgmt", {t: v[0] for t, v in dec.BIP_SUITES.items()})
 
 
+BIGTK_IDS = (6, 7)
+
+
+def _infer_bip(mic_len, key_len):
+    """不知道组管理套件时，由 MIC 长度和密钥长度推出可能的 BIP 套件名。"""
+    return [name for name, klen, mlen in dec.BIP_SUITES.values() if klen == key_len and mlen == mic_len]
+
+
 def verify_bip(igtks, mgmt_ciphers, frame):
-    """校验一个广播 / 组播管理帧的 MME，用 AP 的 IGTK（按 MME 里的密钥序号、装上时间在帧之前，从新到旧）。
-    返回 "ok" / "bad"（有 IGTK 但不吻合）/ "no_igtk"（没有可用的 IGTK 或不知道套件），帧里没有 MME 返回 None。"""
+    """校验一个广播 / 组播管理帧的 MME，用 AP 的 IGTK / BIGTK（按 MME 里的密钥序号）。先试装上时间在帧之前的（从新到旧），
+    再试装上时间在帧之后的（从旧到新）：信标常常比关联早抓到，它用的就是之后才送给站点的那把密钥，MIC 吻合就是实实在在的证明。
+    套件取自 RSN 的组管理套件；不知道时按 MME 的 MIC 长度和密钥长度推（8 字节 MIC 只能是 BIP-CMAC-128；16 字节的 16 位密钥是 GMAC-128，32 位密钥可能是 GMAC-256 或 CMAC-256，两个都试）。
+    返回 "ok" / "bad"（有密钥但不吻合）/ "no_igtk"（没有可用的密钥）/ "unsupported"（MME 用的是 BIGTK：信标保护），帧里没有 MME 返回 None。"""
     h = frame.h
     if h["type"] != 0 or h["protected"] or dec.find_mme(frame.body) is None:
         return None
     cipher = mgmt_ciphers.get(h["addr2"])
-    key_id = dec.find_mme(frame.body)[0]
-    cands = sorted((k for k in igtks if k.ap == h["addr2"] and k.igtk is not None and k.igtk[0] == key_id and k.n < frame.n), key=lambda k: -k.n)
-    if cipher is None or not cands:
-        return "no_igtk"
-    return "ok" if any(dec.verify_bip(k.igtk[2], cipher, frame)[0] for k in cands) else "bad"
+    key_id, _ipn, mic, _off = dec.find_mme(frame.body)
+    if key_id in BIGTK_IDS:              # 密钥序号 6 / 7 = BIGTK（保护信标）：信标的 MIC 范围规则还没确定，不判
+        return "unsupported"
+    same = [k for k in igtks if k.ap == h["addr2"] and k.igtk is not None and k.igtk[0] == key_id]
+    cands = sorted((k for k in same if k.n < frame.n), key=lambda k: -k.n) + sorted((k for k in same if k.n >= frame.n), key=lambda k: k.n)
+    tried = False
+    for k in cands:
+        for name in ([cipher] if cipher else _infer_bip(len(mic), len(k.igtk[2]))):
+            tried = True
+            if dec.verify_bip(k.igtk[2], name, frame)[0]:
+                return "ok"
+    return "bad" if tried else "no_igtk"
 
 
 def decrypt_group(keys, ciphers, frame):

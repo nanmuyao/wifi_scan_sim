@@ -15,6 +15,7 @@ def decrypt_capture(frames, keys):
     """frames：frames80211.iter_frames 的结果（列表）。返回 {帧号: {"how": "wep" / "pairwise" / "group", "msdus": [bytes, ...]}}，
     只含解开了的受保护数据帧（受保护的管理帧、认证帧里的 WEP 不含 LLC，不在其中）。"""
     done, _ = hs.track(frames, keys)
+    mld = hs.mld_addresses(frames)
     gkeys, gciph = gk.track_group(frames, done), gk.group_ciphers(frames, done)
     wkeys = dec.wep_keys(keys)
     out = {}
@@ -27,7 +28,7 @@ def decrypt_capture(frames, keys):
         if w is not None:
             how, plain = "wep", w[0]
         else:
-            p = dec.decrypt_frame(done, f)
+            p = dec.decrypt_frame(done, f, mld)
             if p is not None:
                 how, plain = "pairwise", p[1]
             else:

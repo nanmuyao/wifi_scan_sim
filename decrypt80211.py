@@ -25,8 +25,15 @@ def pn_of(body):
     return pn, body[3] >> 6, bool(body[3] & 0x20)
 
 
-def aad_of(dot11, h):
-    """从完整的 802.11 帧算 AAD（见模块说明）。"""
+def _link_to_mld(mld, addr):
+    """多链路：把 6 字节的链路地址换成 MLD 地址（mld 是 {"aa:bb:..": "MLD 地址"}）；不在表里（或没有表）原样返回。"""
+    if not mld:
+        return bytes(addr)
+    return _mac(mld.get(":".join("%02x" % b for b in addr), ":".join("%02x" % b for b in addr)))
+
+
+def aad_of(dot11, h, mld=None):
+    """从完整的 802.11 帧算 AAD（见模块说明）。mld 给了就把 A1 / A2 / A3 / A4 里的链路地址换成 MLD 地址（单播的多链路帧，见 decrypt_aead）。"""
     fc = bytearray(dot11[:2])
     if h["type"] == 2:
         fc[0] &= 0x8F                  # 数据帧：子类型的 b4-b6（管理帧的子类型整个保留）
@@ -34,24 +41,26 @@ def aad_of(dot11, h):
     if h["qos"] is not None:
         fc[1] &= ~0x80 & 0xFF          # 顺序位（QoS 数据帧里表示带 HT 控制）
     sc = struct.pack("<H", struct.unpack("<H", dot11[22:24])[0] & 0x000F)
-    aad = bytes(fc) + dot11[4:22] + sc
+    aad = bytes(fc) + b"".join(_link_to_mld(mld, dot11[i:i + 6]) for i in (4, 10, 16)) + sc
     if h["addr4"] is not None:
-        aad += dot11[24:30]
+        aad += _link_to_mld(mld, dot11[24:30])
     if h["qos"] is not None:
         off = 30 if h["addr4"] is not None else 24
         aad += struct.pack("<H", struct.unpack("<H", dot11[off:off + 2])[0] & 0x000F)
     return aad
 
 
-def decrypt_aead(tk, cipher, frame):
-    """解一个 CCMP / GCMP 帧。返回 (明文, MIC 是否通过, PN)；明文从 LLC 开始。"""
+def decrypt_aead(tk, cipher, frame, mld=None):
+    """解一个 CCMP / GCMP 帧。返回 (明文, MIC 是否通过, PN)；明文从 LLC 开始。
+    mld：多链路设备之间的单播帧，nonce 里的 A2 和 AAD 里的地址用 MLD 地址而不是帧头里的链路地址（由 wpa3-mlo 的真实帧确定：只有这样 MIC 才通过）；
+    组播帧用的是每条链路自己的 GTK，地址保持链路地址，不传 mld。"""
     h, body = frame.h, frame.body
     mic = MIC_LEN[cipher]
     if len(body) < 8 + mic:
         raise ValueError("帧体太短")
     pn, _key_id, _ext = pn_of(body)
-    a2 = _mac(h["addr2"])
-    aad = aad_of(frame.dot11, h)
+    a2 = _link_to_mld(mld, frame.dot11[10:16]) if mld else _mac(h["addr2"])
+    aad = aad_of(frame.dot11, h, mld)
     if cipher.startswith("CCMP"):
         prio = 0x10 if h["type"] == 0 else (h["qos"]["tid"] if h["qos"] is not None else 0)     # 管理帧：nonce 标志的 bit 4
         nonce = bytes([prio]) + a2 + pn.to_bytes(6, "big")
@@ -80,32 +89,33 @@ def decrypt_tkip(tk, frame, michael_key=None):
     return msdu, icv_ok, m_ok, tsc
 
 
-def decrypt_any(cipher, key, frame):
+def decrypt_any(cipher, key, frame, mld=None):
     """按套件解一个帧：返回 (明文, 完整性是否通过)。AEAD 看 MIC；TKIP 要 ICV 和 Michael 都过（分片帧只看 ICV）。"""
     if cipher == "TKIP":
         if len(frame.body) < 8 + 4 + 8:
             raise ValueError("帧体太短")
         msdu, icv_ok, m_ok, _tsc = decrypt_tkip(key, frame)
         return msdu, icv_ok and m_ok is not False
-    pt, ok, _pn = decrypt_aead(key, cipher, frame)
+    pt, ok, _pn = decrypt_aead(key, cipher, frame, mld)
     return pt, ok
 
 
 SUPPORTED = tuple(MIC_LEN) + ("TKIP",)
 
 
-def decrypt_frame(handshakes, frame):
+def decrypt_frame(handshakes, frame, mld=None):
     """在已推出的握手里找能解开这一帧的 PTK：同一对地址、M2 在这一帧之前的握手，从新到旧逐个试（重新握手之后到新密钥
     装上之前的帧、Extended Key ID 下新旧两把密钥同时有效，都要靠 MIC 来分辨）。返回 (握手, 明文) 或 None。
-    CCMP / GCMP / TKIP 的单播数据帧，以及 CCMP / GCMP 保护的单播管理帧（PMF）。"""
+    mld：{链路地址: MLD 地址}（handshake80211.mld_addresses），多链路设备的帧头里是链路地址。CCMP / GCMP / TKIP 的单播数据帧，以及 CCMP / GCMP 保护的单播管理帧（PMF）。"""
     h = frame.h
     if h["type"] not in (0, 2) or not h["protected"]:
         return None
-    pair = {h["addr1"], h["addr2"]}
+    link = (lambda a: mld.get(a, a)) if mld else (lambda a: a)        # 多链路：帧头里是链路地址，握手记的是 MLD 地址
+    pair = {link(h["addr1"]), link(h["addr2"])}
     for hs in sorted((x for x in handshakes if {x.ap, x.sta} == pair and x.frames["m2"] < frame.n and x.cipher in SUPPORTED),
                      key=lambda x: -x.frames["m2"]):
         try:
-            pt, ok = decrypt_any(hs.cipher, hs.tk, frame)
+            pt, ok = decrypt_any(hs.cipher, hs.tk, frame, mld)
         except ValueError:
             continue
         if ok:
@@ -184,3 +194,38 @@ def verify_bip(igtk, cipher, frame):
 
 def _eq(a, b):
     return len(a) == len(b) and c._const_eq(a, b)
+
+
+# 用户直接给的 TK（Wireshark 密钥表里的 "tk" 项）：没有握手也能解，套件靠 TK 长度和 MIC 来定
+TK_CIPHERS = {16: ("CCMP-128", "GCMP-128"), 32: ("CCMP-256", "GCMP-256")}
+
+
+def user_tks(keys):
+    """从密钥表（[(类型, 值)]）取出 "tk" 项：十六进制，16 或 32 字节。"""
+    out = []
+    for typ, val in keys:
+        if typ == "tk":
+            try:
+                k = bytes.fromhex(val)
+            except ValueError:
+                continue
+            if len(k) in TK_CIPHERS:
+                out.append(k)
+    return out
+
+
+def decrypt_user_tk(tks, frame, mld=None):
+    """用用户给的 TK 解一个受保护的单播帧（数据帧或管理帧）：每把 TK 按长度试可能的套件，MIC 通过的就是。返回 (明文, TK, 套件名) 或 None。
+    多链路设备之间的数据帧要 MLD 地址（mld），抓包里没有关联帧就拿不到，解不开；管理帧用链路地址即可。"""
+    h = frame.h
+    if h["type"] not in (0, 2) or not h["protected"]:
+        return None
+    for tk in tks:
+        for cipher in TK_CIPHERS[len(tk)]:
+            try:
+                pt, ok, _pn = decrypt_aead(tk, cipher, frame, mld if h["type"] == 2 else None)
+            except ValueError:
+                continue
+            if ok:
+                return pt, tk, cipher
+    return None

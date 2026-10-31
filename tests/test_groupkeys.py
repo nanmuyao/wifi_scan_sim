@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """groupkeys80211：KDE 解析、Key Data 解包、GTK / IGTK 提取、组播帧解密（独立加密方）。真实抓包的对照在 tests/oracle/test_groupkeys_oracle.py。"""
 import os
+import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -99,6 +100,37 @@ check(gk.group_ciphers([mgmt(8, B3, rsn(1), FIX[8])]) == {}, "WEP 等不处理�
 HS = type("H", (), {"ap": M(B3), "cipher": "CCMP-256"})
 check(gk.group_ciphers([beacon], [HS]) == {M(B1): "TKIP", M(B3): "CCMP-256"}, "什么都没抓到的 AP：猜成对套件")
 check(gk.group_ciphers([mgmt(8, B3, rsn(4), FIX[8])], [HS])[M(B3)] == "CCMP-128", "有信标时不用猜测")
+
+print("== 多链路的组密钥 KDE（mlo_keys）==")
+L0, L1 = bytes([2, 0, 0, 0, 0, 0xa0]), bytes([2, 0, 0, 0, 0, 0xb1])
+M0, M1 = ":".join("%02x" % x for x in L0), ":".join("%02x" % x for x in L1)
+link_kde = lambda lid, mac: kde(0x13, bytes([0x30 | lid]) + mac + b"\x30\x02\x01\x00")                  # noqa: E731  链路 ID + 标志(RSNE / RSNXE 在)、MAC、其后的 RSNE
+gtk_kde = lambda kid, tx, link, gtk: kde(0x10, bytes([kid | tx << 2 | link << 4]) + bytes(6) + gtk)        # noqa: E731
+igtk_kde = lambda typ, kid, link, key: kde(typ, struct.pack("<H", kid) + bytes([1, 2, 3, 4, 5, 6]) + bytes([link << 4]) + key)     # noqa: E731
+G0, G1_, I0, B1 = bytes(range(16)), bytes(range(16, 32)), bytes(range(32, 48)), bytes(range(48, 64))
+blob = link_kde(0, L0) + link_kde(1, L1) + gtk_kde(1, 1, 0, G0) + gtk_kde(2, 0, 1, G1_) + igtk_kde(0x11, 4, 0, I0) + igtk_kde(0x12, 6, 1, B1) + RSN_IE
+got = gk.mlo_keys(blob, 11, "M3")
+by = {(k.ap, k.key_id): k for k in got}
+check(len(got) == 4, "两个 GTK + 一个 IGTK + 一个 BIGTK = 4 条")
+k0, k1 = by[(M0, 1)], by[(M1, 2)]
+check((k0.gtk, k0.tx, k0.source, k0.n, k0.igtk) == (G0, True, "M3", 11, None) and (k1.gtk, k1.tx) == (G1_, False), "MLO GTK KDE：第 1 字节 bit0-1 序号、bit2 Tx、高 4 位链路 ID；跳过 6 字节 RSC；链路 ID 经链路 KDE 换成链路 MAC")
+mg = [k for k in got if k.igtk]
+check(sorted((k.ap, k.igtk[0], k.igtk[2]) for k in mg) == sorted([(M0, 4, I0), (M1, 6, B1)]) and all(k.gtk == b"" and k.key_id == -1 and not k.tx for k in mg), "IGTK（0x11）/ BIGTK（0x12）：密钥序号 2 字节小端、IPN 6、链路 ID 在高 4 位、然后是密钥；放在单独的条目里（gtk 为空、key_id = -1）")
+check(all(k.igtk[1] == bytes([1, 2, 3, 4, 5, 6]) for k in mg), "IPN 6 字节")
+only_g1 = gtk_kde(3, 1, 1, G0) + igtk_kde(0x11, 5, 1, I0)
+links = {}
+gk.mlo_keys(blob, 11, "M3", links)
+check(links == {0: M0, 1: M1}, "链路表由调用方保存：M3 的链路 KDE 并进去")
+g1 = gk.mlo_keys(only_g1, 16, "G1", links)
+check(sorted((k.ap, k.key_id) for k in g1) == sorted([(M1, 3), (M1, -1)]) and all(k.source == "G1" for k in g1), "G1 里没有链路 KDE：用 M3 记下的表")
+check(gk.mlo_keys(only_g1, 16, "G1") == [], "没有链路表、消息里也没有链路 KDE：链路 ID 对不上，全部丢掉")
+check(gk.mlo_keys(gtk_kde(1, 1, 5, G0) + link_kde(0, L0), 1, "M3") == [], "链路 ID 5 不在链路 KDE 里：丢掉")
+check(gk.mlo_keys(link_kde(0, L0) + kde(0x10, bytes([1]) + bytes(6) + bytes(14)) + kde(0x11, bytes(20)), 1, "M3") == [], "GTK 不足 16 字节 / IGTK 不足 25 字节的 KDE：丢掉")
+check(gk.mlo_keys(link_kde(0, L0)[:-3], 1, "M3") == [] and gk.mlo_keys(b"", 1, "M3") == [], "残缺的 KDE / 空数据：没有键，不崩溃")
+check(gk.mlo_keys(kde(0x13, bytes([0x30]) + bytes(3)) + gtk_kde(1, 1, 0, G0), 1, "M3") == [], "链路 KDE 短于 7 字节：不收，GTK 找不到链路")
+check(gk.mlo_keys(kde(0x13, bytes([0x30]) + bytes(5)) + gtk_kde(1, 1, 0, G0), 1, "M3") == [], "链路 KDE 恰好 6 字节（MAC 少一个字节）：不收")
+k9 = gk.mlo_keys(link_kde(9, L1) + gtk_kde(1, 1, 9, G0), 1, "M3")
+check(len(k9) == 1 and k9[0].ap == M1, "链路 ID 9（超过 7）：链路 ID 占 4 位，不是 3 位")
 
 print("== decrypt_group ==")
 BSSID = ":".join("%02x" % x for x in A2)

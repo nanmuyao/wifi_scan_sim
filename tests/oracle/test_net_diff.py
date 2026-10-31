@@ -114,7 +114,7 @@ EXPECTED = {
     "wpa2-psk-mfp.pcapng.gz": (9, {'snap/arp': 2, 'snap/ipv4/icmp': 3, 'snap/ipv4/udp/dhcp': 4}, 0, 0, 0),
     "wpa3-ft-sae-ext-key-group20.pcapng.gz": (4, {'snap/ipv6/icmpv6': 4}, 0, 4, 0),
     "wpa3-ft-sae-h2e.pcapng.gz": (16, {'snap/arp': 6, 'snap/ipv4/icmp': 4, 'snap/ipv4/udp/dhcp': 6}, 0, 6, 0),
-    "wpa3-mlo.pcapng.gz": (0, {}, 0, 0, 0),
+    "wpa3-mlo.pcapng.gz": (8, {'snap': 2, 'snap/ipv6/icmpv6': 6}, 0, 6, 0),
     "wpa3-sae-ext-key-group21.pcapng.gz": (2, {'snap/ipv4/udp': 2}, 0, 2, 0),
     "wpa3-sae.pcapng.gz": (10, {'snap/arp': 2, 'snap/ipv4/udp/dhcp': 8}, 0, 0, 0),
     "wpa3-suiteb-192.pcapng.gz": (0, {}, 0, 0, 0),
@@ -156,7 +156,7 @@ for name in sorted(os.listdir(fetch_samples.SAMPLE_DIR)):
     check(diff == 0, "%s：和 tshark 的协议字段逐帧一致" % name)
     check(row == EXPECTED[name], "%s：%s（表里 %s）" % (name, row, EXPECTED[name]))
 if EXPECTED:
-    check(total == 1291 and ours_only_frames == 14 and amsdu_frames == 0, "共 %d 个解出的数据帧，其中 %d 个是 tshark 没有答案、靠校验和（和 CCMP 的 MIC）判断的；A-MSDU 帧 %d" % (total, ours_only_frames, amsdu_frames))
+    check(total == 1299 and ours_only_frames == 20 and amsdu_frames == 0, "共 %d 个解出的数据帧，其中 %d 个是 tshark 没有答案、靠校验和（和 CCMP 的 MIC）判断的；A-MSDU 帧 %d" % (total, ours_only_frames, amsdu_frames))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)
