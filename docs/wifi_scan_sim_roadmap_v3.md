@@ -107,8 +107,15 @@ WPA（WPA1：版本、组密码、成对套件、AKM；布局同 RSN，套件 OU
 `decode_rsnxe`（244：长度字段、受保护 TWT、SAE hash-to-element、SAE-PK；其余位保留原样不命名）。
 与 tshark 在 24 个样例上一致：移动域 38 帧、BSS 最大空闲 26 帧、RSNXE 25 帧（H2E 位在 WPA3 样例里置位）。
 这三种在样例里数量不多，所以另造了 16 个合成帧，把每一位单独置位逐个对照 tshark（RSNXE 的 bit4 / 5 / 6 各自单独验证了位号）。
-**没做**：FT 元素（55，FTE：MIC、ANonce、SNonce 和子元素）和「支持的运行类别」（59）。
+**没做**：「支持的运行类别」（59）。FT 元素（55）在阶段 E 做了，见下一节。
 tshark 里它们的字段名没有规整的前缀，找不到可靠的对照字段；FTE 本身和 FT 握手的密钥层级相连，留到阶段 E 一起做。
+### 快速切换元素 FTE（E1a）
+`ie.decode_ft`：MIC Control(2)（字节 0 的 bit0 = RSNXE 已用，bit1-3 = MIC 长度编码 0 / 1 / 2 = 16 / 24 / 32 字节，字节 1 = 元素个数）‖ MIC ‖ ANonce(32) ‖ SNonce(32) ‖ 子元素；
+子元素 1 = R1KH-ID、2 = GTK、3 = R0KH-ID、4 = IGTK。对照 tshark 在 4 个 FT 样例里的 16 个带 FTE 的管理帧（`tests/oracle/test_ft_diff.py`）：
+wpa2-ft-eap、wpa2-ft-psk、wpa3-ft-sae-h2e 的 11 帧所有字段相同。**wpa3-ft-sae-ext-key-group20 的 5 帧是 24 字节 MIC（编码 1），tshark 4.4 只当 16 字节读，
+后面的 ANonce / SNonce / 子元素全部错位 8 字节（R1KH-ID 读不出来）**——以我们的为准，因为子元素用我们的长度恰好把数据用尽（R1KH-ID 00:01:02:03:04:06、R0KH-ID "nas1.w1.fi" 可读），
+差异固定成列表。对解码的 10 个改动做变异检查，抓住 9 个，第 10 个（多加一个无意义的子元素名）是等价改动。
+
 ### Multi-Link（C3）
 `decode_multi_link`（扩展元素 107，Wi-Fi 7）：控制类型（basic / probe request / reconfiguration / TDLS / priority access）、
 公共信息长度、MLD MAC 地址、链路 ID，以及每个站点配置（链路 ID、完整配置位、STA MAC、STA 信息长度、固定字段、**嵌套的元素**）。

@@ -297,6 +297,39 @@ def decode_mobility_domain(d):
     return {"mdid": d[0] | d[1] << 8, "ft_capab": d[2], "ft_over_ds": bool(d[2] & 1), "resource_request": bool(d[2] >> 1 & 1)}
 
 
+FT_MIC_LENGTHS = {0: 16, 1: 24, 2: 32}           # MIC Control 的 MIC Length 子字段 -> MIC 字节数
+FT_SUBELEMS = {1: "r1kh_id", 2: "gtk", 3: "r0kh_id", 4: "igtk"}
+
+
+def decode_ft(d):
+    """快速切换元素（55，FTE）：MIC Control(2) ‖ MIC(16 / 24 / 32) ‖ ANonce(32) ‖ SNonce(32) ‖ 子元素(ID, 长度, 数据)…
+    MIC Control：字节 0 的 bit0 = RSNXE 已用，bit1-3 = MIC 长度编码（0 = 16，1 = 24，2 = 32），字节 1 = 被 MIC 覆盖的元素个数。
+    子元素：1 = R1KH-ID（6 字节），2 = GTK，3 = R0KH-ID（1-48 字节），4 = IGTK。其余放在 subelements 里原样给出。
+    MIC 长度编码不认识、数据不够长、子元素长度越界，返回 None。"""
+    if len(d) < 2:
+        return None
+    code = d[0] >> 1 & 7
+    mic_len = FT_MIC_LENGTHS.get(code)
+    if mic_len is None or len(d) < 2 + mic_len + 64:
+        return None
+    p = 2 + mic_len
+    out = {"mic_control": d[0] | d[1] << 8, "rsnxe_used": bool(d[0] & 1), "mic_length": mic_len, "element_count": d[1],
+           "mic": bytes(d[2:p]), "anonce": bytes(d[p:p + 32]), "snonce": bytes(d[p + 32:p + 64]), "subelements": []}
+    p += 64
+    while p < len(d):
+        if p + 2 > len(d) or p + 2 + d[p + 1] > len(d):
+            return None
+        sid, n = d[p], d[p + 1]
+        body = bytes(d[p + 2:p + 2 + n])
+        out["subelements"].append((sid, body))
+        if FT_SUBELEMS.get(sid) and FT_SUBELEMS[sid] not in out:
+            out[FT_SUBELEMS[sid]] = body
+        p += 2 + n
+    out.setdefault("r1kh_id", None)
+    out.setdefault("r0kh_id", None)
+    return out
+
+
 def decode_bss_max_idle(d):
     """BSS 最大空闲周期（90）：周期 2 字节（小端，单位 1000 TU）+ 选项 1 字节（bit0 要求受保护的保活帧）。长度必须是 3。"""
     if len(d) != 3:
@@ -472,6 +505,7 @@ DECODERS = {
     48: ("rsn", decode_rsn),
     50: ("ext_rates", decode_rates),
     54: ("mdie", decode_mobility_domain),
+    55: ("fte", decode_ft),
     90: ("bss_max_idle", decode_bss_max_idle),
     244: ("rsnxe", decode_rsnxe),
 }

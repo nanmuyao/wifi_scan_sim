@@ -28,6 +28,7 @@ run "组密钥（KDE、Key Data 解包、GTK / IGTK、组播帧解密）" python
 run "组密钥对照 tshark 的 GTK（37 个，15 个相同）" python3 tests/oracle/test_groupkeys_oracle.py
 run "BIP（四种套件的独立构造、IGTK 选择、组管理套件）" python3 tests/test_bip.py
 run "BIP 在真实抓包上（MME 个数对照 tshark，1 个 GMAC-256 帧验证通过）" python3 tests/oracle/test_bip_oracle.py
+run "FTE（快速切换元素）对照 tshark（16 帧）" python3 tests/oracle/test_ft_diff.py
 run "EAPOL-Key 解析与帧迭代" python3 tests/test_eapol.py
 run "EAPOL-Key 对照 tshark（109 帧）" python3 tests/oracle/test_eapol_diff.py
 run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test_kdf80211.py
