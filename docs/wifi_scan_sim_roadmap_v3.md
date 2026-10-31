@@ -26,8 +26,16 @@
 | 加密套件 | WEP、TKIP、CCMP、CCMP-256、GCMP、GCMP-256、BIP（保护管理帧） | 仅 CCMP-128 |
 | 认证与密钥管理 | PSK、FT-PSK/FT-EAP、EAP、SAE（WPA3）、SAE-EXT-KEY、OWE、Suite-B 192 | 仅 PSK + WPA2 四次握手 |
 | radiotap | 多种 present 位组合；Wi-Fi 7 样例有多个 present 字 | 只会跳过头部，不解析字段 |
+| 抓包文件格式 | 24 个文件全是 gzip，其中 18 个是 pcapng | **只认未压缩的经典 pcap：24 个样例（共 6471 帧）一个都打不开** |
 
 这些数字是后面验收的起点：每个阶段结束时重新跑一次，数字只能往好的方向动。
+重新生成：`bash tests/docker.sh bash -c "python3 tests/oracle/fetch_samples.py && python3 tests/oracle/diff.py --samples"`。
+
+### 阶段 A 过程中发现的问题
+- **控制帧、数据帧子类型表是错的**（RTS 写成 4、CTS 5、ACK 6，标准是 11、12、13；QoS Null 写成 10，标准是 12 等）。
+  项目自己用同样的错误编号生成 `demo.pcap`，所以自己和自己对得上；用 tshark 对照才暴露。已修复（提交 4050928），
+  并加了逐项对照 tshark 值表的测试。
+- **只认经典 pcap**：这是上面 0/24 的原因，是阶段 B 的第一步。
 
 ## 2. 验证方法（贯穿所有阶段）
 
@@ -47,6 +55,7 @@
 - 验收：一条命令生成覆盖率报告；对现有解析器给出基线数字。
 
 ### 阶段 B：帧层完整
+- B0 抓包文件读取：gzip + pcapng（含 Decryption Secrets Block：样例若把密钥放在里面，这里就能读出来，同时回答第 2 节留下的那个问题）。没有这一步，24 个样例一个都打不开。
 - 内容：radiotap 全字段（TSFT、速率、信道、信号、MCS/VHT/HE 等，含多个 present 字）；
   MAC 头所有变体（4 地址、QoS 控制、HT 控制、分片、顺序位）；全部管理 / 控制 / 数据子类型；Action 帧各类别；A-MSDU。
 - 顺带：把单个 31KB 的 `wifi_frame_parser.py` 拆成包（`wifi80211/`：radiotap、frame、ie、action、crypto、handshake），命令行入口保持不变。
@@ -85,7 +94,8 @@
 |---|---|---|---|
 | 帧层逐帧与 tshark 一致 | B | 全部 24 个 | 待做 |
 | 信息元素 23/23 + 扩展 8/8 | C | 全部 24 个 | 待做（现 4/23、0/8） |
-| WPA2-PSK / CCMP-128 | 已有 | `wpa-Induction`、`wpa-test-decode` | 已有（待用公开样例复验，属阶段 A） |
+| WPA2-PSK / CCMP-128 | 已有 | `wpa-Induction`、`wpa-test-decode` | 已有，但公开样例要先能打开（阶段 B0）才能复验 |
+| 阶段 A：标准答案与差分工具 | A | 全部 24 个 | **已完成**（tshark 4.4.19、固定提交的样例下载、差分工具、基线 0/24） |
 | TKIP、WEP | D | `wpa2-psk-ccmp-tkip`、`wep` | 待做 |
 | CCMP-256、GCMP | D | `wpa-ccmp-256`、`wpa-gcmp*` | 待做 |
 | PMF（BIP） | D | `wpa2-psk-mfp` | 待做 |
