@@ -44,6 +44,19 @@ gcc -o test_ap_parser test_ap_parser.c ap_parser.c
 ./test_ap_parser
 ```
 
+### 1b. 固件接收链路仿真测试（Docker）
+
+把 `stm32_project/Core/Src/main.c` 的**真实代码**（接收回调、`esp_wait`、`parse_cwlap`）
+加一层 HAL 桩编译到 PC，经虚拟串口连到 `esp8266_sim.py`，扫满 3 轮后逐项比对 8 个 AP，
+同时检查接收中断有无溢出。需要 Docker：
+
+```bash
+bash tests/sim_chain/run.sh
+```
+
+用旧版 `main.c`（帧结束判断错误）跑同一个测试会因握手永远完不成而触发看门狗超时，
+说明测试能抓到这类问题。
+
 ### 2. 自动演示：模拟器 + 客户端全流程
 
 ```bash
