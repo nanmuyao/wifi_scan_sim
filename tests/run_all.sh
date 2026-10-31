@@ -32,6 +32,9 @@ run "FTE（快速切换元素）对照 tshark（16 帧）" python3 tests/oracle/
 run "FT 密钥层级（真实抓包的已知答案、公式结构）" python3 tests/test_ft.py
 run "SAE 认证帧与曲线检查（独立生成的点）" python3 tests/test_sae.py
 run "SAE / OWE 对照 tshark（commit / confirm / DH 参数，曲线上的点）" python3 tests/oracle/test_sae_diff.py
+run "解密后的内容（LLC/SNAP、ARP、IP、UDP、TCP、ICMP、DHCP 与校验和，scapy 独立构造）" python3 tests/test_net.py
+run "解密流水线接线（WEP 合成帧、A-MSDU）" python3 tests/test_pipeline.py
+run "解密后的内容对照 tshark（1291 个数据帧逐层，校验和全部吻合）" python3 tests/oracle/test_net_diff.py
 run "EAPOL-Key 解析与帧迭代" python3 tests/test_eapol.py
 run "EAPOL-Key 对照 tshark（109 帧）" python3 tests/oracle/test_eapol_diff.py
 run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test_kdf80211.py

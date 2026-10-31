@@ -391,10 +391,20 @@ SAE 的 confirm 要用 KCK，同样验不了。OWE 的 M1 / M2 / 关联帧里也
 - 这一阶段密码学最重，椭圆曲线先用 Python 整数手写（学习为目的，不求速度），并与 pycryptodome 的结果交叉验证。
 - 验收：`wpa3-sae`、`wpa3-sae-ext-key-group21`、`wpa3-ft-sae-h2e`、`owe*`、`wpa2-ft-*`、`wpa3-suiteb-192` 在给定 PMK 的前提下推导的 TK / GTK 与测试套件一致。SAE 的口令 → PMK 另需标准测试向量或自家抓包（见第 2 节）。
 
-### 阶段 F：解密之后的内容
-- 解密后只做到能验证“解对了”：LLC/SNAP → ARP / IPv4 / IPv6 / UDP / DHCP 的最小解析。
-  Wireshark 的测试用 “Who has 192.168.5.18”（ARP）和 “DHCP ACK” 断言解密成功，我们断言同样的内容。
-- 不做 TLS 等更上层的内容。
+### 阶段 F：解密之后的内容（已完成）
+- 解密后只做到能验证“解对了”：LLC/SNAP → ARP / IPv4 / IPv6 / UDP / TCP / ICMP / ICMPv6 / DHCP 的最小解析（`net80211.py`），以及把前面各层接起来的 `pipeline80211.decrypt_capture`
+  （握手 + 重新握手 + FT 漫游 → PTK，M3 / G1 / FT 响应 → GTK，WEP 密钥；逐帧试 WEP / 单播 / 组播；A-MSDU 拆开）。不做 TLS 等更上层的内容。
+- **结果**（`tests/oracle/test_net_diff.py`）：24 个样例共解开 1291 个受保护的数据帧，逐层是：ARP 110、IPv4/ICMP 510、IPv4/UDP 241（其中 DHCP 83）、IPv4/TCP 67、IPv4 其它 48、IPv6/ICMPv6 94、IPv6/UDP 68、
+  生成树 BPDU 18、别的以太类型（EAPOL 等）135。和 tshark 的协议字段逐帧一致：ARP 操作码与地址、IP 源目的地址与协议号、UDP / TCP 端口与标志、ICMP / ICMPv6 类型、DHCP 报文类型与 xid；
+  tshark 多解的层（ICMP 差错报文里嵌套的原包、Teredo 隧道里的 IPv6）不比，只允许它多、不允许它不一样。
+- **「解对了」的独立证明**：所有解出来的 IPv4 头、UDP、TCP、ICMP、ICMPv6 校验和全部吻合——解密错一个比特就对不上，不依赖 tshark。**14 个 tshark 解不开的帧**（64 字节 PMK、FT 漫游、ext-key 等）
+  就靠这个加上 CCMP 的 MIC 来判断：owe-3-dh-groups 的 2 帧是下面那种图案 ICMP（IPv4 头校验和对），其余 12 帧校验和都对——ICMPv6 4 帧（含伪头）、UDP 2 帧、wpa3-ft-sae-h2e 漫游后的 6 帧（ARP / DHCP / ICMP）。
+- **唯一的例外**：13 个 ICMP 回显应答（owe-3-dh-groups 3 个、wpa_ptk_extended_key_id 10 个）的 ICMP 校验和不对，但 IPv4 头校验和是对的，tshark 也报「Checksum Status: Bad」——
+  负载是 00 01 02 03… 的测试图案，ICMP 头本身不合规，是样例自己的性质，不是解密的问题（解密由 CCMP 的 MIC 保证）。
+- **测试**：`tests/test_net.py` 用 scapy 构造 IPv4 / IPv6 / UDP / TCP / ICMP / ICMPv6 / ARP / DHCP（校验和由 scapy 算）；`tests/test_pipeline.py` 用 WEP 合成帧测接线（含 A-MSDU）。
+  对 `net80211.py` 近 60 个改动做变异检查，起初 10 个存活（校验和进位只折一次、IPv6 链路层填充、目的地选项扩展头、分片头保留位、UDP 长度超界、TCP 的 NS 标志位、DHCP 重复选项、DHCP 端口、LLC 控制字段），
+  补用例后全部抓住；`pipeline80211` 11 个改动只剩 1 个等价（`type != 2` 之外的 `not protected` 检查，后面的解密函数本来就拒绝未受保护的帧）。
+- 还没做：Wireshark 测试套件里对解密结果的具体断言（如「Who has 192.168.5.18」「DHCP ACK」的出现次数）没有逐条照搬，我们对 tshark 的逐帧字段对照覆盖了同样的东西，但不是它们的原话。
 
 ### 阶段 G（可选）：Wi-Fi 7 与其他
 - MLO（Multi-Link）：`wpa-mlo-ccmp`、`wpa3-mlo`；TDLS（`wpa-test-decode-tdls`）；Mesh 元素；Extended Key ID（`wpa_ptk_extended_key_id`）。
