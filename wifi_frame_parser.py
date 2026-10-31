@@ -18,6 +18,8 @@ scapy 仅用于【生成】标准测试帧；解析路径完全是手写字节�
 
 import struct
 
+import capture
+
 # ---------------------------------------------------------------------------
 # 802.11 帧类型/子类型查表
 # ---------------------------------------------------------------------------
@@ -393,44 +395,28 @@ def RadioTap():
 
 
 def strip_radiotap(raw):
-    """剥离 Radiotap 头，返回 Dot11 帧起始。len 字段在 offset 2（2 字节小端）。"""
+    """剥离 Radiotap 头，返回 Dot11 帧起始。头长度是 offset 2 的 2 字节小端（不是固定值）。"""
     if len(raw) < 8:
         return raw
-    return raw[8:]
+    hlen = struct.unpack("<H", raw[2:4])[0]
+    if hlen < 8:
+        return b""                 # 头长度不合法：没有可解析的 802.11 帧
+    return raw[hlen:]              # 长度超过整个包时得到空串
 
 
 # ---------------------------------------------------------------------------
 # pcap 文件解析（真实抓包：手写 pcap 容器解析，仅依赖 struct）
 # ---------------------------------------------------------------------------
 def read_pcap(path):
-    """读取 pcap 文件（全局头 + 包记录），支持微秒/纳秒与大小端 magic。"""
-    with open(path, "rb") as fp:
-        data = fp.read()
-    magic = data[:4]
-    if magic == b"\xd4\xc3\xb2\xa1":
-        endian, nanosec = "<", False
-    elif magic == b"\x4d\x3c\xb2\xa1":
-        endian, nanosec = "<", True
-    elif magic == b"\xa1\xb2\xc3\xd4":
-        endian, nanosec = ">", False
-    elif magic == b"\xa1\xb2\x3c\x4d":
-        endian, nanosec = ">", True
-    else:
-        raise ValueError("不是标准 pcap 文件 (magic=%r)" % magic)
-    if len(data) < 24:
-        raise ValueError("pcap 文件过短")
-    linktype = struct.unpack(endian + "I", data[20:24])[0]
+    """读取抓包文件（pcap / pcapng，可 gzip 压缩），返回 (第一个接口的链路类型, 包列表, 是否纳秒)。
+
+    包列表每项 (秒, 微秒, 捕获长度, 原始长度, 数据)。新代码请直接用 capture.read_capture。"""
+    cap = capture.read_capture(path)
     pkts = []
-    off = 24
-    n = len(data)
-    while off + 16 <= n:
-        ts_sec, ts_frac, incl_len, orig_len = struct.unpack(endian + "IIII", data[off:off + 16])
-        off += 16
-        if off + incl_len > n:
-            break
-        pkts.append((ts_sec, ts_frac, incl_len, orig_len, data[off:off + incl_len]))
-        off += incl_len
-    return linktype, pkts, nanosec
+    for p in cap.packets:
+        sec = int(p.ts)
+        pkts.append((sec, int(round((p.ts - sec) * 1e6)), p.caplen, p.origlen, p.data))
+    return (cap.linktypes[0] if cap.linktypes else 0), pkts, False
 
 
 LINKTYPE_NAME = {
@@ -456,17 +442,19 @@ def parse_ctrl_short(buf):
 
 def parse_pcap_file(path):
     """解析整个 pcap 文件，逐帧提取 802.11 信息。"""
-    linktype, pkts, nanosec = read_pcap(path)
+    cap = capture.read_capture(path)
+    linktype = cap.linktypes[0] if cap.linktypes else 0
     results = []
-    for ts_sec, ts_frac, incl_len, orig_len, body in pkts:
+    for pkt in cap.packets:
+        body = pkt.data
         dot11 = body
-        if linktype == 127:      # Radiotap 链路层
+        if pkt.linktype == 127:      # Radiotap 链路层
             dot11 = strip_radiotap(body)
-        elif linktype == 1:      # Ethernet（转发/本机抓包场景，剥 14 字节头）
+        elif pkt.linktype == 1:      # Ethernet（转发/本机抓包场景，剥 14 字节头）
             dot11 = body[14:] if len(body) > 14 else body
         rec = {
-            "t": ts_sec + ts_frac / (1e9 if nanosec else 1e6),
-            "incl": incl_len, "orig": orig_len, "raw": len(dot11),
+            "t": pkt.ts, "linktype": pkt.linktype,
+            "incl": pkt.caplen, "orig": pkt.origlen, "raw": len(dot11),
         }
         if len(dot11) < 2:
             rec["error"] = "帧过短"
@@ -524,7 +512,7 @@ def print_pcap_report(path):
             print("      error: %s" % r["error"])
             continue
         if "ra" in r:
-            print("      RA=%s%s" % (r["ra"], ("  TA=%s" % r["ta"]) if "ta" in r else ""))
+            print("      RA=%s" % r["ra"])
         if "ta" in r:
             print("      TA=%s" % r["ta"])
         if "addr1" in r:
