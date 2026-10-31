@@ -109,6 +109,13 @@ FIELDS += [("mdid", "wlan.mobility_domain.mdid"), ("mde_ft_capab", "wlan.mobilit
            ("idle_protected", "wlan.bss_max_idle.options.protected"),
            ("rsnx", "wlan.rsnx"), ("rsnx_len", "wlan.rsnx.length"), ("rsnx_twt", "wlan.rsnx.protected_twt_operations_support"),
            ("rsnx_h2e", "wlan.rsnx.sae_hash_to_element"), ("rsnx_pk", "wlan.rsnx.sae_pk")]
+# Mesh（802.11s）：Mesh ID 和 Mesh Configuration
+FIELDS += [("mesh_id", "wlan.mesh.id"), ("mesh_path", "wlan.mesh.config.ps_protocol"), ("mesh_metric", "wlan.mesh.config.ps_metric"), ("mesh_cong", "wlan.mesh.config.cong_ctl"),
+           ("mesh_sync", "wlan.mesh.config.sync_method"), ("mesh_auth", "wlan.mesh.config.auth_protocol"), ("mesh_formation", "wlan.mesh.config.formation_info"),
+           ("mesh_peers", "wlan.mesh.config.formation_info.num_peers"), ("mesh_gate", "wlan.mesh.formation_info.connect_to_mesh_gate"),
+           ("mesh_as", "wlan.mesh.formation_info.connect_to_as"), ("mesh_cap", "wlan.mesh.config.cap"), ("mesh_accept", "wlan.mesh.config.cap.accept"),
+           ("mesh_mcca_support", "wlan.mesh.config.cap.mcca_support"), ("mesh_mcca_enabled", "wlan.mesh.config.cap.mcca_enabled"), ("mesh_forwarding", "wlan.mesh.config.cap.forwarding"),
+           ("mesh_mbca", "wlan.mesh.config.cap.mbca_enabled"), ("mesh_tbtt", "wlan.mesh.config.cap.tbtt_adjusting"), ("mesh_ps", "wlan.mesh.config.cap.power_save_level")]
 # Multi-Link（802.11be）：控制类型、公共信息长度、MLD MAC、链路 ID（第一个出现的）
 FIELDS += [("ml_type", "wlan.eht.multi_link.control.type"), ("ml_common_len", "wlan.eht.multi_link.common_info.length"),
            ("ml_mld_mac", "wlan.eht.multi_link.common_info.mld_mac_address"),
@@ -150,6 +157,8 @@ CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multic
                   "rsnx_len", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "he_mac", "he_chanwidth", "he_rx80", "he_tx80", "he_rx160", "he_tx160", "he_rx8080", "he_tx8080", "heop_params", "heop_pe",
                   "heop_twt", "heop_vht", "heop_basic", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "ml_type", "ml_common_len", "ml_mld_mac", "ml_link_id", "ml_sta_ctrl",
                   "ml_sta_link_ids", "wmm_subtype", "wmm_version", "wmm_qos",
+                  "mesh_id", "mesh_path", "mesh_metric", "mesh_cong", "mesh_sync", "mesh_auth", "mesh_formation", "mesh_peers", "mesh_gate", "mesh_as", "mesh_cap", "mesh_accept",
+                  "mesh_mcca_support", "mesh_mcca_enabled", "mesh_forwarding", "mesh_mbca", "mesh_tbtt", "mesh_ps",
                   "wmm_uapsd", "wmm_psc", "wpa_version", "wpa_mcs", *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "acm", "ecwmin", "ecwmax", "txop")], "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
                   "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
 # 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
@@ -198,8 +207,11 @@ def _norm(name, v):
                 "ht_primary", "heop_pe", "act_category", "act_ba_buffers", "act_ssc_frag", "act_ssc_seq"):
         return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
     if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc", "mdid", "mde_ft_capab", "idle_options", "rsnx",
-                "he_mac", "he_chanwidth", "he_rx80", "he_tx80", "he_rx160", "he_tx160", "he_rx8080", "he_tx8080", "heop_params", "heop_basic"):
+                "he_mac", "he_chanwidth", "he_rx80", "he_tx80", "he_rx160", "he_tx160", "he_rx8080", "he_tx8080", "heop_params", "heop_basic",
+                "mesh_path", "mesh_metric", "mesh_cong", "mesh_sync", "mesh_auth", "mesh_formation", "mesh_peers", "mesh_cap"):
         return int(v, 0)
+    if name == "mesh_id":
+        return v.encode("utf-8", "surrogateescape") if v != "<MISSING>" else b""
     if name in ("ssid", "tim_bitmap"):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
     if name == "country":
@@ -218,7 +230,7 @@ def _norm(name, v):
     if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
         return {"1": True, "0": False}.get(v)
     if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu",
-                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "wmm_uapsd", *["wmm_acm_" + ac for ac in WMM_AC],
+                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "mesh_gate", "mesh_as", "mesh_accept", "mesh_mcca_support", "mesh_mcca_enabled", "mesh_forwarding", "mesh_mbca", "mesh_tbtt", "mesh_ps", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "wmm_uapsd", *["wmm_acm_" + ac for ac in WMM_AC],
                 "htcap_ldpc", "htcap_width40", "htcap_greenfield", "htcap_short_gi20", "htcap_short_gi40", "htcap_tx_stbc",
                 "htcap_delayed_ba", "htcap_max_amsdu_7935", "htcap_dsss_cck_40", "htcap_psmp", "htcap_forty_intolerant",
                 "htcap_lsig_txop"):
@@ -485,6 +497,13 @@ def ours_frames(path):
             "rsnx_twt": _ie(r, "rsnxe", "protected_twt"),
             "rsnx_h2e": _ie(r, "rsnxe", "sae_h2e"),
             "rsnx_pk": _ie(r, "rsnxe", "sae_pk"),
+            "mesh_id": _ie(r, "mesh_id", "id"),
+            "mesh_path": _ie(r, "mesh_config", "path_protocol"), "mesh_metric": _ie(r, "mesh_config", "path_metric"), "mesh_cong": _ie(r, "mesh_config", "congestion"),
+            "mesh_sync": _ie(r, "mesh_config", "sync"), "mesh_auth": _ie(r, "mesh_config", "auth"), "mesh_formation": _ie(r, "mesh_config", "formation"),
+            "mesh_peers": _ie(r, "mesh_config", "num_peers"), "mesh_gate": _ie(r, "mesh_config", "gate"), "mesh_as": _ie(r, "mesh_config", "as_connected"),
+            "mesh_cap": _ie(r, "mesh_config", "cap"), "mesh_accept": _ie(r, "mesh_config", "accepting"), "mesh_mcca_support": _ie(r, "mesh_config", "mcca_support"),
+            "mesh_mcca_enabled": _ie(r, "mesh_config", "mcca_enabled"), "mesh_forwarding": _ie(r, "mesh_config", "forwarding"), "mesh_mbca": _ie(r, "mesh_config", "mbca"),
+            "mesh_tbtt": _ie(r, "mesh_config", "tbtt_adjusting"), "mesh_ps": _ie(r, "mesh_config", "power_save"),
             "vendor_oui": _vendors(r, lambda v: v["oui"]),
             "wfa_type": _vendors(r, lambda v: v["type"], lambda v: v["oui"] == 0x0050F2),
             "ml_type": _ml(r, "type"),

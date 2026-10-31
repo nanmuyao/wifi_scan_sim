@@ -434,7 +434,7 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 - 还没做：Wireshark 测试套件里对解密结果的具体断言（如「Who has 192.168.5.18」「DHCP ACK」的出现次数）没有逐条照搬，我们对 tshark 的逐帧字段对照覆盖了同样的东西，但不是它们的原话。
 
 ### 阶段 G（可选）：Wi-Fi 7 与其他
-- MLO（Multi-Link）、TDLS、Extended Key ID 已完成（见上面各节）。Mesh 元素没有样例可对，未做。
+- MLO（Multi-Link）、TDLS、Extended Key ID 已完成（见上面各节）。Mesh 元素没有样例，用合成帧对照 tshark 做了 Mesh ID 和 Mesh Configuration（`ie.decode_mesh_id` / `decode_mesh_config`）；对等管理和 AMPE 没做。
 
 ## 4. 完成度矩阵（每阶段结束更新）
 
@@ -454,7 +454,7 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 | TDLS | G | `wpa-test-decode-tdls` | **已完成**（TPK、两个 MIC、直连帧） |
 | Extended Key ID | G | `wpa_ptk_extended_key_id` | **已完成**（新旧两把 PTK 靠 MIC 区分） |
 | 解密后的内容（ARP / IP / UDP / TCP / ICMP / DHCP）与校验和 | F | 全部 | **已完成**：1301 个数据帧，校验和全部吻合（13 个测试图案的 ICMP 例外，tshark 同报 Bad） |
-| Mesh 元素 | G | 无样例 | 未做 |
+| Mesh 元素（Mesh ID、Mesh Configuration） | G | 无样例 | **已完成**，用 31 个合成帧逐字段对照 tshark（每一位单独变化）；Mesh 对等管理 / 认证（AMPE）没做，无样例也无合成参照 |
 | 包 `wifi80211/` | — | — | **已完成**（模块列表见 `wifi80211/__init__.py`；`wpa2_handshake.py` 是早期实现，保留作历史） |
 
 ## 5. 硬件怎么看（给不熟悉硬件的读者）

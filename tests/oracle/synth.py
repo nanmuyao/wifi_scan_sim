@@ -126,6 +126,19 @@ def cases():
     out.append(("Beacon WPA element, 802.1X", mgmt(8, 12, ie(0, b"w") + ie(221, b"\x00\x50\xf2\x01" + le(1) + s(4, oui=b"\x00\x50\xf2") + le(1) + s(4, oui=b"\x00\x50\xf2") + le(1) + s(1, oui=b"\x00\x50\xf2")))))
     out.append(("Beacon WPS + unknown vendors in order", mgmt(8, 12, ie(0, b"v") + ie(221, b"\x00\x50\xf2\x04\x10\x4a\x00\x01\x10") + ie(221, b"\x00\x11\x22\x33\x44") + ie(221, wmm_param()) + ie(221, b"\xaa\xbb\xcc"))))
     out.append(("Beacon WPA, WMM, vendor, RSN together", mgmt(8, 12, ie(0, b"v") + ie(48, rsn_wpa2) + ie(221, wpa) + ie(221, wmm_param()))))
+    # Mesh（802.11s）：Mesh ID 和 Mesh Configuration，每个字段、每一位单独变化
+    out.append(("Beacon mesh id", mgmt(8, 12, ie(0, b"") + ie(114, b"my-mesh"))))
+    out.append(("Beacon mesh id wildcard", mgmt(8, 12, ie(0, b"") + ie(114, b""))))
+    out.append(("Beacon mesh id 32 bytes", mgmt(8, 12, ie(0, b"") + ie(114, b"ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"))))
+    out.append(("Beacon mesh config default", mgmt(8, 12, ie(0, b"") + ie(114, b"m") + ie(113, bytes([1, 1, 0, 1, 1, 0, 0])))))
+    for i, v in enumerate((3, 5, 2, 4, 9)):
+        cfg = [1, 1, 0, 1, 1, 0, 0]
+        cfg[i] = v
+        out.append(("Beacon mesh config field %d = %d" % (i, v), mgmt(8, 12, ie(0, b"") + ie(113, bytes(cfg)))))
+    for bit in range(8):
+        out.append(("Beacon mesh config formation bit %d" % bit, mgmt(8, 12, ie(0, b"") + ie(113, bytes([1, 1, 0, 1, 1, 1 << bit, 0])))))
+        out.append(("Beacon mesh config capability bit %d" % bit, mgmt(8, 12, ie(0, b"") + ie(113, bytes([1, 1, 0, 1, 1, 0, 1 << bit])))))
+    out.append(("Beacon mesh config formation 5 peers + gate", mgmt(8, 12, ie(0, b"") + ie(113, bytes([1, 1, 0, 1, 1, 0x0b, 0x4f])))))
     # 移动域 / BSS 最大空闲周期 / RSNXE
     for capab in (0x00, 0x01, 0x02, 0x03):
         out.append(("Beacon mobility domain, FT capab 0x%02x" % capab, mgmt(8, 12, ie(0, b"m") + ie(54, b"\x01\x02" + bytes([capab])))))

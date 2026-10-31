@@ -297,6 +297,25 @@ def decode_mobility_domain(d):
     return {"mdid": d[0] | d[1] << 8, "ft_capab": d[2], "ft_over_ds": bool(d[2] & 1), "resource_request": bool(d[2] >> 1 & 1)}
 
 
+def decode_mesh_id(d):
+    """Mesh ID（114，802.11s）：网状网名字，0-32 字节（0 字节 = 通配）。超过 32 字节返回 None。"""
+    if len(d) > 32:
+        return None
+    return {"id": bytes(d)}
+
+
+def decode_mesh_config(d):
+    """Mesh Configuration（113）：7 字节——主动路径选择协议、路径度量、拥塞控制、同步方法、认证协议、形成信息、能力。
+    形成信息：bit0 连到网关、bit1-6 对等连接数、bit7 连到认证服务器；
+    能力：bit0 接受新的对等连接、1 MCCA 支持、2 MCCA 启用、3 转发、4 MBCA 启用、5 TBTT 调整、6 省电级别（bit7 保留）。长度必须是 7。"""
+    if len(d) != 7:
+        return None
+    f, c = d[5], d[6]
+    return {"path_protocol": d[0], "path_metric": d[1], "congestion": d[2], "sync": d[3], "auth": d[4], "formation": f, "gate": bool(f & 1), "num_peers": f >> 1 & 0x3F, "as_connected": bool(f >> 7 & 1),
+            "cap": c, "accepting": bool(c & 1), "mcca_support": bool(c >> 1 & 1), "mcca_enabled": bool(c >> 2 & 1), "forwarding": bool(c >> 3 & 1), "mbca": bool(c >> 4 & 1),
+            "tbtt_adjusting": bool(c >> 5 & 1), "power_save": bool(c >> 6 & 1)}
+
+
 FT_MIC_LENGTHS = {0: 16, 1: 24, 2: 32}           # MIC Control 的 MIC Length 子字段 -> MIC 字节数
 FT_SUBELEMS = {1: "r1kh_id", 2: "gtk", 3: "r0kh_id", 4: "igtk"}
 
@@ -506,6 +525,8 @@ DECODERS = {
     50: ("ext_rates", decode_rates),
     54: ("mdie", decode_mobility_domain),
     55: ("fte", decode_ft),
+    113: ("mesh_config", decode_mesh_config),
+    114: ("mesh_id", decode_mesh_id),
     90: ("bss_max_idle", decode_bss_max_idle),
     244: ("rsnxe", decode_rsnxe),
 }

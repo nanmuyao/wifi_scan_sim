@@ -238,6 +238,24 @@ check(m == {"mdid": 0x0201, "ft_capab": 1, "ft_over_ds": True, "resource_request
 m = ie.decode_mobility_domain(b"\xa1\xb2\x02")
 check(m["mdid"] == 0xb2a1 and not m["ft_over_ds"] and m["resource_request"], "移动域：bit1 资源请求协议；两个位不混")
 check(ie.decode_mobility_domain(b"\x01\x02") is None and ie.decode_mobility_domain(b"\x01\x02\x00\x00") is None, "移动域：长度必须是 3")
+print("== Mesh ID / Mesh Configuration ==")
+check(ie.decode_mesh_id(b"my-mesh") == {"id": b"my-mesh"} and ie.decode_mesh_id(b"") == {"id": b""} and ie.decode_mesh_id(bytes(32)) == {"id": bytes(32)}, "Mesh ID：0-32 字节原样")
+check(ie.decode_mesh_id(bytes(33)) is None, "Mesh ID 超过 32 字节：None")
+mc = ie.decode_mesh_config(bytes([1, 2, 3, 4, 5, 0, 0]))
+check((mc["path_protocol"], mc["path_metric"], mc["congestion"], mc["sync"], mc["auth"]) == (1, 2, 3, 4, 5), "前 5 个字段的顺序：路径协议、度量、拥塞控制、同步、认证")
+for bit, key in ((0, "gate"), (7, "as_connected")):
+    m = ie.decode_mesh_config(bytes([0, 0, 0, 0, 0, 1 << bit, 0]))
+    check(m[key] is True and m["formation"] == 1 << bit and m["num_peers"] == 0 and sum(1 for k in ("gate", "as_connected") if m[k]) == 1, "形成信息 bit%d = %s，别的位不受影响" % (bit, key))
+for n in (1, 5, 63):
+    check(ie.decode_mesh_config(bytes([0, 0, 0, 0, 0, n << 1, 0]))["num_peers"] == n and not ie.decode_mesh_config(bytes([0, 0, 0, 0, 0, n << 1, 0]))["gate"], "形成信息 bit1-6 = 对等连接数 %d" % n)
+for bit, key in enumerate(("accepting", "mcca_support", "mcca_enabled", "forwarding", "mbca", "tbtt_adjusting", "power_save")):
+    m = ie.decode_mesh_config(bytes([0, 0, 0, 0, 0, 0, 1 << bit]))
+    check(m[key] is True and m["cap"] == 1 << bit and sum(1 for k in ("accepting", "mcca_support", "mcca_enabled", "forwarding", "mbca", "tbtt_adjusting", "power_save") if m[k]) == 1, "能力 bit%d = %s，只有这一位" % (bit, key))
+check(ie.decode_mesh_config(bytes([0, 0, 0, 0, 0, 0, 0x80]))["cap"] == 0x80 and not any(ie.decode_mesh_config(bytes([0, 0, 0, 0, 0, 0, 0x80]))[k] for k in ("accepting", "power_save", "forwarding")), "能力 bit7 保留：不当别的位")
+check(ie.decode_mesh_config(bytes(6)) is None and ie.decode_mesh_config(bytes(8)) is None, "长度必须是 7")
+els, _ = ie.walk(bytes([114, 3]) + b"abc" + bytes([113, 7]) + bytes([1, 1, 0, 1, 1, 0, 0]))
+check(ie.decode_all(els)["mesh_id"]["id"] == b"abc" and ie.decode_all(els)["mesh_config"]["path_protocol"] == 1, "decode_all 认 113 / 114 号元素")
+
 print("== 快速切换元素（FTE）==")
 AN, SN = bytes(range(32)), bytes(range(100, 132))
 sub = bytes([1, 6]) + bytes([2, 0, 0, 0, 0, 1]) + bytes([3, 4]) + b"r0kh"
