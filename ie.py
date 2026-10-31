@@ -511,7 +511,18 @@ DECODERS = {
 }
 
 
-EXT_DECODERS = {EXT_HE_CAP: ("he_cap", decode_he_cap), EXT_HE_OP: ("he_op", decode_he_op)}
+EXT_OWE_DH = 32                      # 扩展元素 ID：OWE 的 Diffie-Hellman 参数
+
+
+def decode_owe_dh(d):
+    """OWE 的 DH 参数（扩展元素 32，关联请求 / 响应里）：椭圆曲线组(2，小端) ‖ 公钥（只有 x 坐标，19 / 20 / 21 组分别 32 / 48 / 66 字节）。
+    长度不足 2 字节返回 None；公钥长度对不对由调用方按组检查。"""
+    if len(d) < 2:
+        return None
+    return {"group": d[0] | d[1] << 8, "public": bytes(d[2:])}
+
+
+EXT_DECODERS = {EXT_HE_CAP: ("he_cap", decode_he_cap), EXT_HE_OP: ("he_op", decode_he_op), EXT_OWE_DH: ("owe_dh", decode_owe_dh)}
 
 
 def decode_all(els):

@@ -364,6 +364,20 @@ wpa2-ft-psk 漫游后最后一帧组播解开，与 tshark 明文相同的组播
 变异检查 15 个改动，起初 4 个存活（密钥序号掩码、包装长度 8 的倍数检查、IGTK 的校验、重复子元素取第一个），补用例后全部抓住；
 只剩一个等价改动：多个握手时按 M2 帧号从新到旧试 KEK（同一对地址、同一个 PMK-R0 推出的 KEK 相同）。
 
+### SAE 与 OWE 的公开部分（E3）
+**先说做不到的**：SAE 和 OWE 的 PMK 来自双方的**私有随机数**（SAE 的 rand / mask，OWE 的 DH 私钥），抓包里只有公开的标量、元素和公钥。
+Wireshark 的测试套件也因此直接给 PMK（密钥表里的 wpa-psk 项）。所以 PMK 的推导（hunting-and-pecking / H2E、k、keyseed、KCK ‖ PMK）无法用这些样例验证；
+SAE 的 confirm 要用 KCK，同样验不了。OWE 的 M1 / M2 / 关联帧里也没有 PMKID 可以对。口令 -> PMK 只能靠标准测试向量（我没有可靠来源的数值），这部分**没做，也不假装做了**。
+**做了的（抓包里看得见、能独立检查的）**：
+- `sae80211.parse_auth`：认证帧（算法 3）的 commit（状态码、组、[反阻塞令牌]、标量、元素 x‖y、后面的元素）和 confirm（send-confirm、按组的哈希长度切 confirm）。状态码 0 / 76 / 77 / 126（H2E）。
+- 曲线检查：组 19 / 20 / 21 = P-256 / P-384 / P-521（常量与 pycryptodome 的表交叉核对），commit 的标量在 [1, n-1]，元素 (x, y) 在曲线上；OWE 的 DH 公钥（只有 x）有对应的曲线点（欧拉判别）。
+- `ie.decode_owe_dh`：OWE 的 DH 参数元素（扩展元素 32）：组 + 公钥。
+**对照 tshark**（`tests/oracle/test_sae_diff.py`）：7 个样例里全部 SAE / OWE 内容（5 个 SAE 样例：4 个带 H2E 状态 126、1 个传统 SAE，共 10 个 commit、10 个 confirm；2 个 OWE 样例）
+与 tshark 的消息类型、组、标量、元素、send-confirm、confirm 逐个相同；OWE 的 8 个 DH 元素（组 19 / 20 / 21）组与公钥相同、长度与组一致。
+**独立的证明**：每个 commit 的元素都在曲线上、标量都合法，每个 OWE 公钥的 x 都有对应的点——如果标量 / 元素的偏移或长度错了，这些检查不可能全部通过，而且它们不依赖 tshark。
+**测试**：`tests/test_sae.py` 用 pycryptodome 生成合法的点（标量 × 生成元），覆盖各种篡改（x / y 改动、坐标 >= p、标量 0 或 n、截断、状态 76 / 77 / 126、不认识的组、confirm 长短）；
+对解析与曲线代码和 OWE 元素解码的二十多个改动做变异检查，起初存活 2 个：状态 77 但组认识且字节够的情形没有用例，补上后抓住；另一个（`rhs == 0` 的特判）等价——素数阶曲线没有 y = 0 的点。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
