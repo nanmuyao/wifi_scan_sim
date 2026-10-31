@@ -121,6 +121,21 @@ FIELDS += [("he_mac", "wlan.ext_tag.he_mac_caps"), ("he_chanwidth", "wlan.ext_ta
            ("heop_params", "wlan.ext_tag.he_operation.params"), ("heop_pe", "wlan.ext_tag.he_operation.default_pe_duration"),
            ("heop_twt", "wlan.ext_tag.he_operation.twt_required"), ("heop_vht", "wlan.ext_tag.he_operation.vht_op_info_present"),
            ("heop_basic", "wlan.ext_tag.he_operation.basic_he_mcs_and_nss")]
+# Action 帧：类别、动作码，Block Ack 与 HT 动作的内容
+ACTION_FIELDS = [("act_category", "wlan.fixed.category_code"), ("act_code", "wlan.fixed.action_code"),
+                 ("act_htcode", "wlan.fixed.htact"),
+                 ("act_token", "wlan.fixed.dialog_token"), ("act_ba_params", "wlan.fixed.baparams"),
+                 ("act_ba_amsdu", "wlan.fixed.baparams.amsdu"), ("act_ba_policy", "wlan.fixed.baparams.policy"),
+                 ("act_ba_tid", "wlan.fixed.baparams.tid"), ("act_ba_buffers", "wlan.fixed.baparams.buffersize"),
+                 ("act_ba_timeout", "wlan.fixed.batimeout"), ("act_ssc", "wlan.fixed.ssc"),
+                 ("act_ssc_frag", "wlan.fixed.ssc.fragment"), ("act_ssc_seq", "wlan.fixed.ssc.sequence"),
+                 ("act_delba", "wlan.fixed.delba.param"), ("act_delba_init", "wlan.fixed.delba.param.initiator"),
+                 ("act_delba_tid", "wlan.fixed.delba.param.tid"), ("act_reason", "wlan.fixed.reason_code"),
+                 ("act_status", "wlan.fixed.status_code"), ("act_chanwidth", "wlan.fixed.chanwidth"),
+                 ("act_sm", "wlan.fixed.sm.powercontrol"), ("act_sm_enabled", "wlan.fixed.sm.powercontrol.enabled"),
+                 ("act_sm_mode", "wlan.fixed.sm.powercontrol.mode")]
+FIELDS += ACTION_FIELDS
+ACTION_ONLY = {n for n, _ in ACTION_FIELDS}       # reason_code / status_code 也出现在认证、关联、解除认证帧里：只在 Action 帧里比较
 WMM_AC = ("be", "bk", "vi", "vo")
 for _ac in WMM_AC:
     FIELDS += [("wmm_aifsn_" + _ac, "wlan.wfa.ie.wme.acp.aifsn_" + _ac), ("wmm_acm_" + _ac, "wlan.wfa.ie.wme.acp.acm_" + _ac),
@@ -180,7 +195,7 @@ def _norm(name, v):
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
                 "dtim_period", "country_env", "ml_type", "ml_common_len", "ml_link_id", "idle_period", "rsnx_len", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
                 *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "ecwmin", "ecwmax", "txop")], "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
-                "ht_primary", "heop_pe"):
+                "ht_primary", "heop_pe", "act_category", "act_ba_buffers", "act_ssc_frag", "act_ssc_seq"):
         return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
     if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc", "mdid", "mde_ft_capab", "idle_options", "rsnx",
                 "he_mac", "he_chanwidth", "he_rx80", "he_tx80", "he_rx160", "he_tx160", "he_rx8080", "he_tx8080", "heop_params", "heop_basic"):
@@ -189,6 +204,11 @@ def _norm(name, v):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
     if name == "country":
         return v
+    if name in ("act_code", "act_htcode", "act_token", "act_ba_params", "act_ba_tid", "act_ba_timeout", "act_ssc", "act_delba",
+                "act_delba_tid", "act_reason", "act_status", "act_chanwidth", "act_sm"):
+        return int(v, 0)
+    if name in ("act_ba_amsdu", "act_ba_policy", "act_delba_init", "act_sm_enabled", "act_sm_mode"):
+        return v == "True" if v in ("True", "False") else int(v, 0) != 0
     if name in ("heop_twt", "heop_vht"):
         return v == "True"
     if name in ("mde_ft_over_ds", "mde_resource", "idle_protected"):      # 带掩码的位字段，显示成「掩码后的值」：非 0 就是置位
@@ -239,6 +259,9 @@ def tshark_frames(path):
             fr[name] = [int(x, 0) for x in p2[j].split(",") if x]
         p3 = (lines3[i].split("\t") if i < len(lines3) else []) + [""] * len(bits)
         fr["extcap_bits"] = [n for n, v in zip(bits, p3) if v == "True"]
+        if fr["type_subtype"] not in (0x0d, 0x0e):
+            for name in ACTION_ONLY:
+                fr[name] = None
         if (fr["type_subtype"] or 0) >> 4 != 0 or fr["type_subtype"] is None:
             for name in CONTENT_FIELDS:
                 fr[name] = None if name in fr and not isinstance(fr[name], list) else []
@@ -253,6 +276,35 @@ def _ie(rec, name, key):
         return None
     e = d.get(name)
     return None if e is None else e[key]
+
+
+def _action_fields(rec):
+    """Action 帧的字段（只在解码出 Action 帧体时有值）。"""
+    a = rec.get("action")
+    out = {n: None for n in ACTION_ONLY}
+    if a is None:
+        return out
+    out["act_category"] = a["category_raw"]          # tshark 的 category_code 带错误响应位（0x83 显示为 131）
+    ht = a["category"] == 7
+    out["act_code" if not ht else "act_htcode"] = a["code"]
+    d = a["details"]
+    if d is None:
+        return out
+    if a["category"] == 3 and a["code"] in (0, 1):
+        p = d["params"]
+        out.update(act_token=d["dialog_token"], act_ba_params=p["value"], act_ba_amsdu=p["amsdu"], act_ba_policy=p["immediate"],
+                   act_ba_tid=p["tid"], act_ba_buffers=p["buffers"], act_ba_timeout=d["timeout"])
+        if a["code"] == 0:
+            out.update(act_ssc=d["ssc"], act_ssc_frag=d["fragment"], act_ssc_seq=d["start_seq"])
+        else:
+            out["act_status"] = d["status"]
+    elif a["category"] == 3 and a["code"] == 2:
+        out.update(act_delba=d["params"], act_delba_init=d["initiator"], act_delba_tid=d["tid"], act_reason=d["reason"])
+    elif ht and a["code"] == 0:
+        out["act_chanwidth"] = d["channel_width"]
+    elif ht and a["code"] == 1:
+        out.update(act_sm=d["control"], act_sm_enabled=d["sm_enabled"], act_sm_mode=d["sm_dynamic"])
+    return out
 
 
 def _flat(rec, key):
@@ -405,6 +457,7 @@ def ours_frames(path):
             "heop_twt": _ie(r, "he_op", "twt_required"),
             "heop_vht": _ie(r, "he_op", "vht_op_present"),
             "heop_basic": _ie(r, "he_op", "basic_mcs_nss"),
+            **_action_fields(r),
             "mdid": _ie(r, "mdie", "mdid"),
             "mde_ft_capab": _ie(r, "mdie", "ft_capab"),
             "mde_ft_over_ds": _ie(r, "mdie", "ft_over_ds"),
@@ -482,6 +535,9 @@ def compare(oracle, ours):
                     details.append((i + 1, name, want, got))
                 continue
             if want is None:
+                if name == "act_category" and got is not None:      # tshark 没给类别（受保护的 Action 帧体是密文），我们却解出来了
+                    stats[name]["diff"] += 1
+                    details.append((i + 1, name, want, got))
                 continue
             if got is None:
                 stats[name]["missing"] += 1

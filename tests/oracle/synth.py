@@ -184,6 +184,28 @@ def cases():
                      ("VHT + co-hosted + 6GHz", dict(params=0x00c000 | 0x020000, extra=b"\x02\x2a\x00" + b"\x03" + b"\x25\x82\x27\x00\x00")),
                      ("basic MCS/NSS map", dict(basic=0xfff0))):
         out.append(("Beacon HE operation, %s" % name, mgmt(8, 12, ie(0, b"he") + heop(**kw))))
+    # Action 帧：块确认 / HT 动作 / 其它类别 / 错误响应 / 受保护
+    def addba_params(amsdu=0, immediate=1, tid=0, buffers=64):
+        return struct.pack("<H", amsdu | immediate << 1 | tid << 2 | buffers << 6)
+
+    for name, tok, params, timeout, frag, seq in (("A-MSDU, immediate, TID 0, 64 buffers", 1, addba_params(1, 1, 0, 64), 0, 0, 1),
+                                                ("delayed, TID 5, 1023 buffers", 0xff, addba_params(0, 0, 5, 1023), 0xffff, 3, 4095),
+                                                ("TID 15, 1 buffer", 7, addba_params(0, 1, 15, 1), 100, 15, 0)):
+        out.append(("Action ADDBA request, %s" % name, frame(0, 13, body=bytes([3, 0, tok]) + params + struct.pack("<HH", timeout, seq << 4 | frag))))
+    for name, status, params in (("success", 0, addba_params(0, 1, 0, 64)), ("failure 37, A-MSDU, TID 9", 37, addba_params(1, 0, 9, 8))):
+        out.append(("Action ADDBA response, %s" % name, frame(0, 13, body=bytes([3, 1, 2]) + struct.pack("<H", status) + params + struct.pack("<H", 0))))
+    for init, tid, reason in ((1, 0, 37), (0, 15, 0xffff), (1, 7, 1)):
+        out.append(("Action DELBA initiator=%d TID %d" % (init, tid), frame(0, 13, body=bytes([3, 2]) + struct.pack("<HH", init << 11 | tid << 12, reason))))
+    out.append(("Action ADDBA request, error response category", frame(0, 13, body=bytes([0x83, 0, 1]) + addba_params() + struct.pack("<HH", 0, 16))))
+    for ctl in (0x00, 0x01, 0x02, 0x03):
+        out.append(("Action HT SM power save, control 0x%02x" % ctl, frame(0, 13, body=bytes([7, 1, ctl]))))
+    for w in (0, 1):
+        out.append(("Action HT notify channel width %d" % w, frame(0, 13, body=bytes([7, 0, w]))))
+    out.append(("Action No Ack, HT SM power save", frame(0, 14, body=bytes([7, 1, 3]))))
+    out.append(("Action SA Query request", frame(0, 13, body=bytes([8, 0, 0x34, 0x12]))))
+    out.append(("Action Radio Measurement request", frame(0, 13, body=bytes([5, 0, 1, 0, 0]))))
+    out.append(("Action Public Action", frame(0, 13, body=bytes([4, 4, 1]))))
+    out.append(("Action protected (body is ciphertext)", frame(0, 13, prot=1, body=bytes([3, 0, 1]) + bytes(range(20)))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))

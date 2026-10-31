@@ -37,6 +37,11 @@ o[0]["tags"], u[0]["tags"] = [], [0, 1]
 check(diff.compare(o, u)[0]["tags"]["diff"] == 1, "tshark 没列元素而我们列了：算不一致（不会被「标准答案为空就跳过」放过）")
 o[0]["tags"], u[0]["tags"] = [], None
 check(diff.compare(o, u)[0]["tags"] == {"ok": 0, "diff": 0, "missing": 0}, "两边都没有元素：不参与")
+o, u = [frame(type_subtype=13)], [frame(type_subtype=13)]
+o[0]["act_category"], u[0]["act_category"] = None, 3
+check(diff.compare(o, u)[0]["act_category"]["diff"] == 1, "tshark 没给 Action 类别（密文）而我们给了：算不一致")
+o[0]["act_category"], u[0]["act_category"] = None, None
+check(diff.compare(o, u)[0]["act_category"] == {"ok": 0, "diff": 0, "missing": 0}, "两边都没有类别：不参与")
 stats, _ = diff.compare([frame(type_subtype=8)] * 2, [frame(type_subtype=8)])
 check(stats["type_subtype"] == {"ok": 1, "diff": 0, "missing": 1}, "我们少解析了帧：多出来的算 missing")
 

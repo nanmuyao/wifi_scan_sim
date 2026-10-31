@@ -19,6 +19,7 @@ scapy 仅用于【生成】标准测试帧；解析路径完全是手写字节�
 import struct
 import zlib
 
+import action
 import capture
 import ie
 import radiotap
@@ -253,17 +254,6 @@ REASON_CODE = {
     46: "Mesh PMSA not configured", 47: "Mesh channel switch unauthorized",
     48: "Mesh establishment failed due to received Disassociation frame",
 }
-ACTION_CATEGORY = {
-    0: "Spectrum Management", 1: "QoS", 2: "DLS", 3: "Block Ack",
-    4: "Public Action", 5: "Radio Measurement", 6: "Fast BSS Transition",
-    7: "HT Action", 8: "SA Query", 9: "Protected Dual of Public Action",
-    10: "WNM", 11: "Unprotected WNM", 12: "TDLS", 13: "Mesh Action",
-    14: "Multihop Action", 15: "Self Protected Action", 16: "DMS Action",
-    17: "WMM Action", 18: "FST Action", 19: "Unprotected Action", 20: "WNM",
-    126: "Vendor Specific Protected", 127: "Vendor Specific",
-}
-
-
 def parse_auth(body):
     """Authentication 帧体：Algorithm(2) + Transaction Seq(2) + Status(2)。"""
     if len(body) < 6:
@@ -333,15 +323,13 @@ def parse_assoc_resp(body):
 
 
 def parse_action(body):
-    """Action 帧体：Category(1) + Action Code(1) + 载荷。"""
-    if len(body) < 2:
+    """Action 帧体：类别 + 动作码 + 内容（见 action.py）。Block Ack、High Throughput 的内容放在 "action" 里。"""
+    a = action.decode_action(body)
+    if a is None:
         return {"error": "Action frame too short: %d" % len(body)}
-    cat, act = body[0], body[1]
-    return {
-        "action_category": ACTION_CATEGORY.get(cat, "Unknown(%d)" % cat),
-        "action_code": act,
-        "action_payload": body[2:].hex(),
-    }
+    name = a["category_name"] or "Unknown(%d)" % a["category"]
+    return {"action_category": name + (" (error response)" if a["error_response"] else ""),
+            "action_code": a["code"], "action_payload": a["payload"].hex(), "action": a}
 
 
 def parse_mgmt_frame(h, body):
@@ -366,7 +354,7 @@ def parse_mgmt_frame(h, body):
         return parse_deauth(body)
     if h["subtype"] == 10:     # Disassociation
         return parse_disassoc(body)
-    if h["subtype"] == 13:     # Action
+    if h["subtype"] in (13, 14) and not h["protected"]:    # Action / Action No Ack；受保护的帧体是密文，不能当明文读
         return parse_action(body)
     return None
 
