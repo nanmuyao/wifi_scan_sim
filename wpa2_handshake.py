@@ -22,6 +22,7 @@ wifi_frame_parser.read_pcap / strip_radiotap，不引入第三方包。
 
 import argparse
 import hashlib
+import hmac
 import struct
 
 try:
@@ -40,6 +41,12 @@ PMK_LEN = 32
 # 标准向量（roadmap 4.1.1 验收基准）：password / IEEE
 PMK_STD_VECTOR = ("f42c6fc52df0ebef9ebb4b90b38a5f90"
                   "2e83fe1b135a70e23aed762e9710a12e")
+
+# 与 tools/make_wpa2_handshake_pcap.py 的 fixture 输入一致（供 4.1.3 演示与 MIC 校验）
+DEMO_ANONCE = bytes.fromhex(
+    "5d1e8a1f2c3b4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6")
+DEMO_SNONCE = bytes.fromhex(
+    "a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f708192a3b4c5d6e7f809")
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +207,7 @@ def extract_handshake_from_pcap(path: str) -> list:
         e = parse_eapol_key(eapol)
         if "error" in e or "key_info" not in e:
             continue
+        e["raw_eapol"] = eapol
         e["t"] = ts_sec + ts_frac / (1e9 if nanosec else 1e6)
         e["msg"] = classify_handshake(e)
         frames.append(e)
@@ -229,6 +237,10 @@ def print_pcap(args):
     if not frames:
         print("未在 %s 中发现 EAPOL-Key 帧" % args.pcap)
         return
+    anonce = next((f["nonce"] for f in frames if f["msg"] == 1),
+                  b"\x00" * 32)
+    snonce = next((f["nonce"] for f in frames if f["msg"] == 2),
+                  b"\x00" * 32)
     print("# EAPOL-Key 帧：%d 条（%s）" % (len(frames), args.pcap))
     for e in frames:
         ki = e["key_info"]
@@ -253,18 +265,249 @@ def print_pcap(args):
         print("  KeyData   : %d 字节%s" % (
             e["key_data_length"],
             "（加密）" if ki["encrypted_key_data"] else "（明文）"))
+        if m in (2, 3, 4) and "raw_eapol" in e:
+            pmk = derive_pmk(args.password.encode("utf-8"),
+                             args.ssid.encode("utf-8"))
+            ap_mac = bytes.fromhex(args.ap_mac.replace(":", ""))
+            sta_mac = bytes.fromhex(args.sta_mac.replace(":", ""))
+            kck, _, _ = derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce)
+            ok = verify_mic(kck, e["raw_eapol"])
+            print("  MIC 校验  : %s（口令=%s, KCK 由 %s 推导）"
+                  % ("一致" if ok else "不一致", args.password, args.ap_mac))
+
+
+def print_ptk(args):
+    """4.1.3 演示：用 fixture 固定输入展开 PTK 并切分 KCK/KEK/TK。"""
+    pmk = derive_pmk(args.password.encode("utf-8"),
+                     args.ssid.encode("utf-8"))
+    ap_mac = bytes.fromhex(args.ap_mac.replace(":", ""))
+    sta_mac = bytes.fromhex(args.sta_mac.replace(":", ""))
+    anonce = DEMO_ANONCE
+    snonce = DEMO_SNONCE
+    kck, kek, tk = derive_ptk(pmk, ap_mac, sta_mac, anonce, snonce)
+    print("# PTK（PRF-512，Pairwise key expansion）")
+    print("PMK      = %s" % pmk.hex())
+    print("AP MAC   = %s / STA MAC = %s" % (args.ap_mac, args.sta_mac))
+    print("ANonce   = %s" % anonce.hex())
+    print("SNonce   = %s" % snonce.hex())
+    print("KCK(16B) = %s" % kck.hex())
+    print("KEK(16B) = %s" % kek.hex())
+    print("TK(16B)  = %s" % tk.hex())
+
+
+# ---------------------------------------------------------------------------
+# 4.1.3 PTK 推导（PRF-512，IEEE 802.11i §8.5.1.1）
+# ---------------------------------------------------------------------------
+def prf_512(key: bytes, a: bytes, b: bytes) -> bytes:
+    """IEEE 802.11i PRF-512：以 HMAC-SHA1 迭代展开为 64 字节。
+
+    PRF(K, A, B, 512) = 拼接 HMAC-SHA1(K, A || 0x00 || i || B)，i=0,1,2...
+    取前 64 字节。KCK/KEK/TK 均由该输出切分得到。
+    """
+    out = b""
+    i = 0
+    while len(out) < 64:
+        out += hmac.new(key, a + b"\x00" + bytes([i]) + b,
+                        hashlib.sha1).digest()
+        i += 1
+    return out[:64]
+
+
+PTK_A_LABEL = b"Pairwise key expansion"
+
+
+def derive_ptk(pmk: bytes, ap_mac: bytes, sta_mac: bytes,
+               anonce: bytes, snonce: bytes):
+    """展开 PTK 并切分为 KCK/KEK/TK（CCMP 128 位用 TK 前 16 字节）。
+
+    B = min(AA,SA) || max(AA,SA) || min(ANonce,SNonce) || max(ANonce,SNonce)
+    返回 (kck, kek, tk)，各 16 字节。
+    """
+    b = (min(ap_mac, sta_mac) + max(ap_mac, sta_mac)
+         + min(anonce, snonce) + max(anonce, snonce))
+    ptk = prf_512(pmk, PTK_A_LABEL, b)
+    return ptk[0:16], ptk[16:32], ptk[32:48]
+
+
+# ---------------------------------------------------------------------------
+# 4.1.4 MIC 校验（HMAC-SHA1，仅 Key Descriptor Version=2 AES/CCMP）
+# ---------------------------------------------------------------------------
+KEY_MIC_OFFSET = EAPOL_HDR + 77   # MIC 字段在完整 EAPOL-Key 帧体内的偏移（16 字节）
+
+
+def zero_key_mic(eapol_frame: bytes) -> bytes:
+    """返回 MIC 字段清零后的 EAPOL-Key 帧体（计算/验证 MIC 的输入）。"""
+    if len(eapol_frame) < KEY_MIC_OFFSET + 16:
+        return eapol_frame
+    return (eapol_frame[:KEY_MIC_OFFSET]
+            + b"\x00" * 16
+            + eapol_frame[KEY_MIC_OFFSET + 16:])
+
+
+def compute_mic(kck: bytes, eapol_frame: bytes) -> bytes:
+    """HMAC-SHA1(KCK, MIC 清零后的 EAPOL-Key 帧体)，取前 16 字节。"""
+    return hmac.new(kck, zero_key_mic(eapol_frame),
+                    hashlib.sha1).digest()[:16]
+
+
+def verify_mic(kck: bytes, eapol_frame: bytes) -> bool:
+    """校验帧内 MIC 是否与 KCK 重算一致。
+
+    前置条件：Key Descriptor Version = 2（AES/CCMP）才用 HMAC-SHA1；
+    TKIP（Version=1）本阶段不支持，直接返回 False。
+    """
+    e = parse_eapol_key(eapol_frame)
+    if "key_info" not in e:
+        return False
+    ki = e["key_info"]
+    if ki["descriptor_version"] != 2:
+        return False                 # 只支持 AES/CCMP
+    if not ki["mic"]:
+        return False                 # 该帧不含 MIC
+    return e["key_mic"] == compute_mic(kck, eapol_frame)
+
+
+# ---------------------------------------------------------------------------
+# 4.1.5 CCMP 解密（AES-128-CCM，nonce=优先级‖A2‖PN，AAD 由 MAC 头屏蔽可变位）
+# 依赖：仅引入 pycryptodome 的 AES 原语（ECB 单块），CCM 拼装全部手写
+# ---------------------------------------------------------------------------
+def _aes128_block(key: bytes, block: bytes) -> bytes:
+    """AES-128 单块加密（pycryptodome 原语）。"""
+    from Crypto.Cipher import AES
+    return AES.new(key, AES.MODE_ECB).encrypt(block)
+
+
+def _ccm_cbc_mac(key: bytes, nonce: bytes, aad: bytes, msg: bytes,
+                 m: int = 8, l: int = 2) -> bytes:
+    """CCM 认证：B0 + AAD + 明文 的 CBC-MAC，返回 m 字节 T。"""
+    flags = 0x40 | (((m - 2) // 2) << 3) | (l - 1)   # Adata + M + L
+    b0 = bytes([flags]) + nonce + len(msg).to_bytes(l, "big")
+    blocks = [b0]
+    if aad:
+        aad_blk = len(aad).to_bytes(2, "big") + aad
+        pad = b"\x00" * ((16 - len(aad_blk) % 16) % 16)
+        blocks.append(aad_blk + pad)
+    if msg:
+        pad = b"\x00" * ((16 - len(msg) % 16) % 16)
+        blocks.append(msg + pad)
+    x = b"\x00" * 16
+    for blk in blocks:
+        x = _aes128_block(key, bytes(a ^ b for a, b in zip(x, blk)))
+    return x[:m]
+
+
+def _ccm_ctr(key: bytes, nonce: bytes, data: bytes, l: int = 2) -> bytes:
+    """CCM 加密/解密用 CTR（counter 从 1 起）。"""
+    out = b""
+    ctr = 1
+    for off in range(0, len(data), 16):
+        a_i = bytes([l - 1]) + nonce + ctr.to_bytes(l, "big")
+        keystream = _aes128_block(key, a_i)
+        out += bytes(x ^ y for x, y in
+                     zip(data[off:off + 16], keystream))
+        ctr += 1
+    return out
+
+
+def ccm_encrypt(key: bytes, nonce: bytes, aad: bytes, msg: bytes,
+                m: int = 8, l: int = 2):
+    """AES-128-CCM 加密，返回 (ciphertext, enc_mic)。"""
+    mic = _ccm_cbc_mac(key, nonce, aad, msg, m, l)
+    ct = _ccm_ctr(key, nonce, msg, l)
+    a0 = bytes([l - 1]) + nonce + (0).to_bytes(l, "big")
+    ks0 = _aes128_block(key, a0)
+    return ct, bytes(x ^ y for x, y in zip(mic, ks0[:m]))
+
+
+def ccm_decrypt(key: bytes, nonce: bytes, aad: bytes,
+                ciphertext: bytes, enc_mic: bytes,
+                m: int = 8, l: int = 2):
+    """AES-128-CCM 解密并校验 MIC，返回 (plaintext, mic_ok)。"""
+    msg = _ccm_ctr(key, nonce, ciphertext, l)
+    calc_mic = _ccm_cbc_mac(key, nonce, aad, msg, m, l)
+    a0 = bytes([l - 1]) + nonce + (0).to_bytes(l, "big")
+    ks0 = _aes128_block(key, a0)
+    dec_mic = bytes(x ^ y for x, y in zip(enc_mic, ks0[:m]))
+    return msg, hmac.compare_digest(calc_mic, dec_mic)
+
+
+CCMP_HDR_LEN = 8          # CCMP Header：Flags(1) + PN(6) + Reserved(1)
+CCMP_MIC_LEN = 8
+
+
+def ccmp_build_aad(mac_header: bytes) -> bytes:
+    """由 MAC 头构造 CCMP AAD（3 地址帧，24/26 字节含 QoS Control）。
+
+    屏蔽规则（802.11-2016 §12.5.3.3.3）：
+      FC 高字节仅保留 ToDS/FromDS（0x03），其余可变位清零；
+      Sequence Control 仅保留 Fragment Number（低 4 位）；
+      Duration/Address/QoS Control 原样保留。
+    """
+    if len(mac_header) < 24:
+        return b""
+    hdr = bytearray(mac_header[:26])
+    hdr[1] &= 0x03                            # FC octet1: ToDS|FromDS
+    seq = struct.unpack("<H", hdr[22:24])[0] & 0x000F
+    hdr[22:24] = struct.pack("<H", seq)
+    return bytes(hdr)
+
+
+def ccmp_encrypt(tk: bytes, tid: int, a2: bytes, pn: bytes,
+                 aad: bytes, plaintext: bytes):
+    """CCMP 加密数据载荷，返回 (ccmp_header, ciphertext, enc_mic)。"""
+    nonce = bytes([tid & 0x07]) + a2 + pn    # 13 字节：优先级‖A2‖PN
+    ct, mic = ccm_encrypt(tk, nonce, aad, plaintext)
+    hdr = b"\x20" + pn + b"\x00"             # Ext IV=1, KeyID=0, PN 6B
+    return hdr, ct, mic
+
+
+def ccmp_decrypt(tk: bytes, tid: int, a2: bytes, pn: bytes,
+                 aad: bytes, ciphertext: bytes, enc_mic: bytes):
+    """CCMP 解密并校验 8 字节 MIC，返回 (plaintext, mic_ok)。"""
+    nonce = bytes([tid & 0x07]) + a2 + pn
+    return ccm_decrypt(tk, nonce, aad, ciphertext, enc_mic)
+
+
+def decrypt_ccmp_frame(tk: bytes, dot11: bytes):
+    """输入加密 802.11 QoS Data 帧（Radiotap 已剥），返回 (plaintext, mic_ok)。
+
+    自动提取 A2（发送方地址）、QoS TID、PN、AAD 与密文/MIC；
+    非受保护数据帧返回 (None, False)。
+    """
+    if len(dot11) < 24:
+        return None, False
+    fc = struct.unpack("<H", dot11[:2])[0]
+    if ((fc >> 2) & 0x03) != 2 or not (fc & 0x4000):
+        return None, False                  # 非数据帧 / 未保护
+    sub = (fc >> 4) & 0x0F
+    mac_len = 26 if sub in (8, 9, 10, 12, 13, 14) else 24
+    if len(dot11) < mac_len + CCMP_HDR_LEN + CCMP_MIC_LEN:
+        return None, False
+    a2 = dot11[10:16]
+    tid = dot11[24] & 0x07 if mac_len == 26 else 0
+    aad = ccmp_build_aad(dot11[:mac_len])
+    pn = dot11[mac_len + 1:mac_len + 7]
+    ct = dot11[mac_len + CCMP_HDR_LEN:-CCMP_MIC_LEN]
+    enc_mic = dot11[-CCMP_MIC_LEN:]
+    return ccmp_decrypt(tk, tid, a2, pn, aad, ct, enc_mic)
 
 
 def main():
     ap = argparse.ArgumentParser(description="WPA2 PMK 推导与 EAPOL 四次握手解析")
     ap.add_argument("--pmk", action="store_true", help="推导 PMK（PBKDF2-HMAC-SHA1）")
+    ap.add_argument("--ptk", action="store_true", help="展开 PTK 并切分 KCK/KEK/TK")
     ap.add_argument("--password", default="password", help="口令（默认 password）")
     ap.add_argument("--ssid", default="IEEE", help="SSID（默认 IEEE，标准向量）")
+    ap.add_argument("--ap-mac", default="aa:bb:cc:dd:ee:01", help="AP 认证者 MAC")
+    ap.add_argument("--sta-mac", default="11:22:33:44:55:66", help="STA 请求者 MAC")
     ap.add_argument("--pcap", metavar="FILE", help="解析 pcap 中的 EAPOL 握手帧")
     args = ap.parse_args()
 
     if args.pcap:
         print_pcap(args)
+        return
+    if args.ptk:
+        print_ptk(args)
         return
     if args.pmk:
         print_pmk(args)
