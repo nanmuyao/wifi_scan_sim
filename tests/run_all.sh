@@ -19,6 +19,8 @@ for t in esp32_project/tests/test_esp32_*.py; do
 done
 run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "差分工具（tshark 对照）" python3 tests/oracle/test_diff.py
+run "EAPOL-Key 解析与帧迭代" python3 tests/test_eapol.py
+run "EAPOL-Key 对照 tshark（109 帧）" python3 tests/oracle/test_eapol_diff.py
 run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test_kdf80211.py
 run "加密原语（CCM / GCM / RC4 / WEP / TKIP / Michael）" python3 tests/test_crypto80211.py
 run "解密标准答案（tshark 用公开密钥解出的明文）" python3 tests/oracle/test_decrypt_oracle.py

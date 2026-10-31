@@ -224,6 +224,16 @@ AES key wrap（EAPOL-Key 的 Key Data，描述符版本 2、3、0）、RC4 密�
 它们由 D4 用 tshark 在 EAPOL 帧上给出的 KCK / KEK、在数据帧上给出的 TK（`wlan.analysis.kck / kek / tk`，`wpa3-sae` 的 TK `20a2e28f…` 与 Wireshark 测试里的期望值一致）逐把对照。
 **tshark 的密钥字段**：KCK / KEK 在 EAPOL 帧上，PMK / TK / GTK 在数据帧上。这把尺子对所有套件通用。
 
+### EAPOL-Key 解析（D4a）
+`eapol.py` + `frames80211.py`（按帧读抓包：去 radiotap、去 FCS、解 MAC 头、取 LLC/SNAP + 0x888e 之后的 EAPOL）。
+24 个样例共 **109 个 EAPOL-Key 帧**（描述符类型 2 和 254；Key Info 版本 0 / 1 / 2 / 3；MIC 16 / 24 字节），版本、类型、长度、描述符、Key Info、Key Length、Replay Counter、
+Nonce、RSC、Key ID、MIC、Key Data 长度与内容、握手消息号，与 tshark **全部一致**。
+**旧的 `parse_eapol_key` 是错的**：它把 Key Info、Replay Counter 等多字节字段按小端读，而 EAPOL-Key 的字段都是大端（WPA2 的 M1 是 `00 8a` = 0x008a）。
+旧代码的测试帧是自己用小端拼的，所以对得上，对真实抓包会把标志位全读错——又一个「自己生成自己解析」的错误。
+**MIC 长度**：16（多数）、24（HMAC-SHA-384，Suite-B 192）、32（SHA-512）。不先知道认证方式也能由「长度字段 = 固定部分 + MIC + 2 + Key Data」推出来，歧义时取最短；
+握手流程里 MIC 长度应由认证方式给定（`parse(buf, mic_len=…)`）。有一个真实帧（Suite-B 192 的第一个 M1）Key Data Length 写 0 但尾部多 22 字节，长度关系推不出，必须靠认证方式——测试里钉成「恰好 1 帧」。
+**消息号**：成对 M1-M4、组密钥 G1 / G2。M4 靠 Secure 位识别；WPA1 的 M4 没有 Secure 位，靠 Nonce 全 0 与 M2 区分。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
