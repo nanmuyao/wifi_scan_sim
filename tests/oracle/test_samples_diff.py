@@ -22,6 +22,9 @@ KNOWN_GAPS = {
     "tags": (2, 43),
     # 8 帧 SAE 认证：帧体不是元素序列，要按曲线组的长度跳过 scalar / element（阶段 E）；另有 2 帧同上的 Multi-Link
     "ext_tags": (2, 8),
+    # 同样是那几帧 Multi-Link：嵌套的子元素里还有速率元素，tshark 把它们的速率并进同一个列表
+    "rates": (2, 0),
+    "ext_rates": (2, 0),
 }
 failures = []
 

@@ -543,6 +543,7 @@ def parse_pcap_file(path):
                     if off is not None and not h["protected"] and len(body) >= off and not sae_auth:    # SAE 认证帧体不是元素序列，阶段 E
                         els, rec["ie_truncated"] = ie.walk(body[off:])
                         rec["ie_ids"], rec["ie_ext_ids"] = ie.ids(els)
+                        rec["ie"] = ie.decode_all(els)
                     m = parse_mgmt_frame(h, body)
                     if m:
                         if "error" in m:

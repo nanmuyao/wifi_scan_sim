@@ -58,6 +58,18 @@ def cases():
                              ("Probe Request", 4, 0), ("Probe Response", 5, 12), ("Beacon", 8, 12),
                              ("Disassociation", 10, 2), ("Authentication (open)", 11, 6), ("Deauthentication", 12, 2)):
         out.append(("%s + elements" % name, mgmt(sub, fixed)))
+    # 元素内容：隐藏 SSID、满长度的非 UTF-8 SSID、带基本速率位的速率表、TIM、国家（含运行类别三元组 + 填充）、ERP
+    rates8 = bytes([0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24])
+    out.append(("Beacon hidden SSID", mgmt(8, 12, ie(0, b"") + ie(1, rates8) + ie(3, b"\x0b"))))
+    out.append(("Beacon 32-byte non-UTF8 SSID", mgmt(8, 12, ie(0, bytes(range(0x80, 0xa0)) ) + ie(1, rates8))))
+    out.append(("Beacon rates + extended rates", mgmt(8, 12, ie(0, b"r") + ie(1, rates8) + ie(50, bytes([0x30, 0x48, 0x60, 0x6c])))))
+    out.append(("Beacon TIM multicast + offset + bitmap", mgmt(8, 12, ie(0, b"t") + ie(5, bytes([1, 3, 0x05, 0x10, 0x20, 0x30])))))
+    out.append(("Beacon TIM no multicast, offset 0, 1-byte bitmap", mgmt(8, 12, ie(0, b"t") + ie(5, bytes([0, 2, 0x00, 0x00])))))
+    out.append(("Beacon country: channel triplet", mgmt(8, 12, ie(0, b"c") + ie(7, b"US \x01\x0b\x1e\x24\x04\x17"))))
+    out.append(("Beacon country: operating-class triplet + padding", mgmt(8, 12, ie(0, b"c") + ie(7, b"DEO" + bytes([0xc9, 0x0d, 0x04]) + bytes([36, 4, 23]) + b"\x00"))))
+    out.append(("Beacon country: negative max power", mgmt(8, 12, ie(0, b"c") + ie(7, b"JP\x20" + bytes([1, 13, 0xf6])))))
+    for v in (0x00, 0x01, 0x02, 0x04, 0x07):
+        out.append(("Beacon ERP 0x%02x" % v, mgmt(8, 12, ie(0, b"e") + ie(42, bytes([v])))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=114))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))

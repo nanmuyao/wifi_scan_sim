@@ -58,8 +58,25 @@ FIELDS = [
     ("fcs", "wlan.fcs"),
     ("fcs_ok", "wlan.fcs.status"),
     ("llc_dsap", "llc.dsap"),      # tshark 在帧体里找到的 LLC：我们的头长度错了，读到的首字节就对不上
+    ("ssid", "wlan.ssid"),
+    ("ds_channel", "wlan.ds.current_channel"),
+    ("dtim_count", "wlan.tim.dtim_count"),
+    ("dtim_period", "wlan.tim.dtim_period"),
+    ("tim_multicast", "wlan.tim.bmapctl.multicast"),
+    ("tim_offset", "wlan.tim.bmapctl.offset"),
+    ("tim_bitmap", "wlan.tim.partial_virtual_bitmap"),
+    ("country", "wlan.country_info.code"),
+    ("country_env", "wlan.country_info.environment"),
+    ("erp", "wlan.erp_info"),
+    ("erp_present", "wlan.erp_info.erp_present"),
+    ("erp_protection", "wlan.erp_info.use_protection"),
+    ("erp_barker", "wlan.erp_info.barker_preamble_mode"),
 ]
-TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number")]
+# 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
+TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number"),
+                ("rates", "wlan.supported_rates"), ("ext_rates", "wlan.extended_supported_rates"),
+                ("country_fcn", "wlan.country_info.fnm.fcn"), ("country_nc", "wlan.country_info.fnm.nc"),
+                ("country_mtpl", "wlan.country_info.fnm.mtpl")]
 TSHARK_MAJOR_MINOR = "4.4"
 
 
@@ -75,15 +92,21 @@ def _norm(name, v):
     if name == "type_subtype":
         return int(v, 16)
     if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
-                "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts"):
+                "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
+                "dtim_period", "country_env"):
         return int(v)
-    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs"):
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp"):
         return int(v, 0)
+    if name in ("ssid", "tim_bitmap"):
+        return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
+    if name == "country":
+        return v
     if name == "datarate":
         return float(v)
     if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
         return {"1": True, "0": False}.get(v)
-    if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu"):
+    if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu",
+                "tim_multicast", "erp_present", "erp_protection", "erp_barker"):
         return v == "True"
     return v
 
@@ -94,9 +117,10 @@ def tshark_frames(path):
     cmd = ["tshark", "-r", path, "-o", "wlan.check_checksum:TRUE", "-T", "fields", "-E", "separator=/t", "-E", "occurrence=f"]
     for _, f in FIELDS:
         cmd += ["-e", f]
-    # 信息元素编号一帧里有很多个：单独取全部出现
-    cmd2 = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=a",
-            "-E", "aggregator=,", "-e", "wlan.tag.number", "-e", "wlan.ext_tag.number"]
+    # 一帧里出现多次的字段（信息元素编号、速率列表等）：单独取全部出现
+    cmd2 = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=a", "-E", "aggregator=,"]
+    for _, f in TSHARK_EXTRA:
+        cmd2 += ["-e", f]
     r = subprocess.run(cmd, capture_output=True, text=True)
     r2 = subprocess.run(cmd2, capture_output=True, text=True)
     if r.returncode != 0:
@@ -109,11 +133,28 @@ def tshark_frames(path):
         parts = line.split("\t")
         parts += [""] * (len(FIELDS) - len(parts))
         fr = {name: _norm(name, parts[j]) for j, (name, _) in enumerate(FIELDS)}
-        p2 = (lines2[i].split("\t") if i < len(lines2) else []) + ["", ""]
-        fr["tags"] = [int(x) for x in p2[0].split(",") if x]
-        fr["ext_tags"] = [int(x) for x in p2[1].split(",") if x]
+        p2 = (lines2[i].split("\t") if i < len(lines2) else []) + [""] * len(TSHARK_EXTRA)
+        for j, (name, _) in enumerate(TSHARK_EXTRA):
+            fr[name] = [int(x, 0) for x in p2[j].split(",") if x]
         frames.append(fr)
     return frames
+
+
+def _ie(rec, name, key):
+    """rec["ie"][name][key]；这一帧没有解码出这个元素时 None。"""
+    d = rec.get("ie")
+    if d is None:
+        return None
+    e = d.get(name)
+    return None if e is None else e[key]
+
+
+def _triplets(rec, key):
+    """国家元素里（起始信道, 信道数, 最大功率）三元组的某一项，全部按顺序；没有国家元素时 None。"""
+    c = (rec.get("ie") or {}).get("country")
+    if c is None:
+        return None
+    return [t[key] for t in c["triplets"] if key in t]
 
 
 def ours_frames(path):
@@ -150,6 +191,24 @@ def ours_frames(path):
             "llc_dsap": r.get("llc_dsap"),
             "tags": r.get("ie_ids"),
             "ext_tags": r.get("ie_ext_ids"),
+            "rates": _ie(r, "rates", "rates"),
+            "ext_rates": _ie(r, "ext_rates", "rates"),
+            "country_fcn": _triplets(r, "first_channel"),
+            "country_nc": _triplets(r, "num_channels"),
+            "country_mtpl": _triplets(r, "max_power"),
+            "ssid": _ie(r, "ssid", "ssid"),
+            "ds_channel": _ie(r, "ds", "channel"),
+            "dtim_count": _ie(r, "tim", "dtim_count"),
+            "dtim_period": _ie(r, "tim", "dtim_period"),
+            "tim_multicast": _ie(r, "tim", "multicast"),
+            "tim_offset": _ie(r, "tim", "offset"),
+            "tim_bitmap": _ie(r, "tim", "bitmap"),
+            "country": _ie(r, "country", "code"),
+            "country_env": _ie(r, "country", "environment"),
+            "erp": _ie(r, "erp", "value"),
+            "erp_present": _ie(r, "erp", "non_erp_present"),
+            "erp_protection": _ie(r, "erp", "use_protection"),
+            "erp_barker": _ie(r, "erp", "barker_preamble"),
             "rt_length": rt.get("length"),
             "mactime": rt.get("tsft"),
             "rt_flags": rt.get("flags"),
