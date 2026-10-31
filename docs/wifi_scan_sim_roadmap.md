@@ -42,19 +42,51 @@ GitHub 上无全栈完全一致的同类项目（STM32+AT 扫描+802.11 帧解�
 | 阶段 1 方案A基础 | STM32+ESP8266 AT 扫描、CWLAP 解析、pty 仿真、802.11 帧解析、采购清单 | ximtech/ESP8266Wifi、wraith-wireless/itamae、flupzor/packetparser | 已完成 |
 | 阶段 2 嗅探扩展 | 移植 ESP8266 deauther/promiscuous 思路，输出 Probe Request 的 SSID/MAC/RSSI 报告 | kalanda/esp8266-sniffer、xiixim101-pixel/sniffus | 待做 |
 | 阶段 3 真实抓包验证 | Linux 机器监听模式抓包回传，用现有解析器验证；macOS 无 RFMON 已实测确认 | —（本机验证流程） | 待做 |
-| 阶段 4 ESP32 版 | ESP32 直扫 + Web 仪表盘 | xiixim101-pixel/sniffus（Web Serial UI） | 待做 |
-| 阶段 5 路线B 频谱 | RTL-SDR 下变频 + STM32 FFT | vpecanins/stm32f7-rtlsdr；备选 PC 端 rtl_power 出图 | 待做 |
+| 阶段 4 WPA2 离线解密 | 已知口令前提下：PBKDF2 推 PMK → 解析 EAPOL 四次握手 → 推 PTK → MIC 校验 → CCMP 解密数据帧；纯离线 pcap，详见 4.1 | florenzi002/WPA-Analyzer、junan-98/WPA2_Decrypt、william-r-dieter/pyDot11、mfontanini/dot11decrypt | 待做 |
+| 阶段 5 ESP32 版 | ESP32 直扫 + Web 仪表盘 | xiixim101-pixel/sniffus（Web Serial UI） | 待做 |
+| 阶段 6 路线B 频谱 | RTL-SDR 下变频 + STM32 FFT | vpecanins/stm32f7-rtlsdr；备选 PC 端 rtl_power 出图 | 待做 |
+
+### 4.1 阶段 4：WPA2 离线解密（设计）
+
+**目标**：给定一份含四次握手的 pcap 和已知口令，把现有解析器里标记为"密文状态"的数据帧解出明文。仅处理**自己的网络**或公开样例，口令必须已知；不做口令爆破，不抓他人流量（见第 5 节合法性边界）。
+
+**依赖**：需要一份带握手的抓包。macOS 无法监听（已实测），来源只有两种：
+- 公开样例：Wireshark 官方 SampleCaptures 里的 WPA 抓包（使用前先核对其口令与 SSID，不要凭记忆）；
+- 阶段 3 在 Linux 上抓自家 AP 的握手。
+
+**拆成 5 步，每步有独立验收，前一步不过不进下一步**
+
+| 步骤 | 内容 | 验收 |
+|---|---|---|
+| 4.1.1 PMK | `PBKDF2-HMAC-SHA1(口令, SSID, 4096 次, 32 字节)` | 对上 802.11i 附录标准向量：口令 `password`、SSID `IEEE` → `f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e`（已用标准库 `hashlib.pbkdf2_hmac` 核对一致） |
+| 4.1.2 EAPOL 解析 | 从数据帧里取 LLC/SNAP（EtherType `0x888E`）后的 EAPOL-Key，区分握手 1–4 条，取出 ANonce、SNonce、MIC、Key Info | 一份抓包里能识别出完整的 4 条，并给出 AP/STA 的 MAC |
+| 4.1.3 PTK | 用 PRF 展开：`PRF-512(PMK, "Pairwise key expansion", min(MAC)‖max(MAC)‖min(Nonce)‖max(Nonce))`，拆出 KCK/KEK/TK | 有标准向量时对向量；没有时靠 4.1.4 间接验证 |
+| 4.1.4 MIC 校验 | 把握手 2（或 3）的 MIC 字段清零，用 KCK 做 HMAC-SHA1 取前 16 字节，与帧内 MIC 比较 | 口令正确 → MIC 一致；故意改错一位口令 → 必须不一致。这是整条密钥链是否正确的**唯一可靠判据**，务必加反向用例 |
+| 4.1.5 CCMP 解密 | AES-128-CCM：nonce = 优先级‖A2‖PN，AAD 由 MAC 头按规则屏蔽可变位得到，TK 解 payload，校验 8 字节 MIC | 解出的 payload 前 8 字节是 LLC/SNAP（`AA AA 03 00 00 00`），再接 IP 头；解不出 → 先排查 AAD 屏蔽位与 PN 字节序 |
+
+**取舍：AES 要不要引入依赖**
+- 4.1.1–4.1.4 只用标准库（`hashlib`/`hmac`/`struct`），保持项目"纯手写、少依赖"的风格；
+- 4.1.5 需要 AES-CCM，标准库没有。选项：①引入 `cryptography` 或 `pycryptodome`，只用它的 AES 原语，CCM 的 nonce/AAD 拼装仍手写；②手写 AES（教学价值高，但慢且易错，不建议作为首版）。建议先走 ①，把"依赖仅限 AES"写进 README。
+
+**已知难点（提前记下，避免卡住）**
+- 握手可能不完整（只抓到 2 条），仍可用握手 2 做 MIC 校验，但 4.1.5 需要 TK，必须 PTK 已定；
+- 数据帧 QoS 位、A4 字段、HT 控制位会影响 AAD 构造和头长度，要在现有 `parse_mac_header` 里补齐；
+- PN 在帧内的字节顺序容易写反；
+- 重放/乱序帧只影响 PN 检查，离线解密可先不做重放校验。
+
+**与现有代码的衔接**：在 `wifi_frame_parser.py` 的 `parse_data_frame` 处，当前遇到 WPA2 加密帧只标记"密文状态"；本阶段给它加一个可选的 `--passphrase/--ssid` 参数，提供密钥时才尝试解密，不提供时行为完全不变，原有 demo 与测试不受影响。
 
 ## 5. 技术决策与取舍
 - 仿真优先：继续沿用 pty 虚拟串口 + 纯C 单测双轨验证，无硬件也能推进
-- 合法性边界：仅自建实验网络；不攻击他人网络
+- 合法性边界：仅自建实验网络；不攻击他人网络；WPA2 解密只在口令已知（自家网络或公开样例）的前提下做，不做口令爆破
 - macOS 限制：监听模式不可用，真实 802.11 抓包需 Linux 机器
 - RTL-SDR 数据率风险：USB Host 搬运 + FFT 计算量大，STM32F103 不足，路线 B 需 F4/F7 级芯片（采购清单已分档）
 
 ## 6. 下一步行动清单（TODO，带优先级）
 - P0：阶段2 嗅探演示脚本（基于现有 pty 仿真扩展 probe 嗅探输出）
 - P0：阶段3 准备 Linux 抓包操作指引（发给用户手动执行）
-- P1：阶段4 ESP32 版设计文档
-- P2：阶段5 RTL-SDR 频谱方案可行性验证（stm32f7-rtlsdr 源码研读）
+- P1：阶段4 WPA2 离线解密：先做 4.1.1 PMK + 标准向量单测，再做 4.1.2 EAPOL 解析
+- P1：阶段5 ESP32 版设计文档
+- P2：阶段6 RTL-SDR 频谱方案可行性验证（stm32f7-rtlsdr 源码研读）
 - P2：更新 README 与本规划文档同步
 *（内容由AI生成，仅供参考）*
