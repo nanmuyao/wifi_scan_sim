@@ -43,7 +43,12 @@
 - **样例**：24 个公开抓包，下载脚本固定到 Wireshark 仓库的某个提交并校验 sha256。
   **不放进本仓库**：Wireshark 源码树是 GPL，本项目是 MIT，下载使用不影响许可，直接收录会。
 - **差分测试**：同一个抓包，我们的解析结果与 tshark 的字段输出逐帧对比，报告“一致 / 不一致 / 我们没解析”三类数量。
-- **解密对照**：Wireshark 的 `test/suite_decryption.py` 里给出了每个样例应当推导出的 TK / GTK 值（例如 `wpa3-sae` 的 TK 是 `20a2e28f…`）；我们推导出的值必须相同。每个样例的口令或密钥从哪里来（口令写在测试里，还是随抓包携带；SAE / OWE 的测试没有传口令，可能是后者），在阶段 A 里逐个确认并记录，这一点本次规划时没有验证。
+- **解密对照**：Wireshark 的 `test/suite_decryption.py` 里给出了每个样例应当推导出的 TK / GTK 值（例如 `wpa3-sae` 的 TK 是 `20a2e28f…`）；我们推导出的值必须相同。密钥来源已查清（阶段 B0 实测）：24 个样例里**没有一个**带解密密钥块；Wireshark 的测试把密钥放在它自己的配置表
+`test/config/80211_keys.tmpl` 里：口令 `Induction`、`test0815`、`12345678`，WEP 密钥 `1234567890`，
+以及一批 `wpa-psk`（十六进制，**直接是 PMK**，用于 OWE / SAE / Suite-B / MLO 样例）和一个 `msk`（EAP 样例）。
+阶段 D 开始时把这张表也按固定提交下载并校验。
+**后果**：SAE 的“口令 → PMK”（hunting-and-pecking / H2E）在这些样例上**没有口令可验证**，
+只能验证 PMK 之后的部分（PTK / TK / GTK）。SAE 本身的正确性要另找依据（IEEE 802.11 标准附录里的测试向量，或自建 hostapd 网络的自家抓包）。
 - **变异检查**：每个新测试，故意改坏实现一处，确认测试会变红（沿用上一轮的做法）。
 
 ## 3. 阶段
@@ -55,7 +60,7 @@
 - 验收：一条命令生成覆盖率报告；对现有解析器给出基线数字。
 
 ### 阶段 B：帧层完整
-- B0 抓包文件读取：gzip + pcapng（含 Decryption Secrets Block：样例若把密钥放在里面，这里就能读出来，同时回答第 2 节留下的那个问题）。没有这一步，24 个样例一个都打不开。
+- B0 抓包文件读取：gzip + pcapng（含 Decryption Secrets Block）。没有这一步，24 个样例一个都打不开。**已完成**：`capture.py`，6471 个包的长度、时间戳、链路类型与 tshark 一致，字节内容与 editcap 转出的 pcap 一致。
 - 内容：radiotap 全字段（TSFT、速率、信道、信号、MCS/VHT/HE 等，含多个 present 字）；
   MAC 头所有变体（4 地址、QoS 控制、HT 控制、分片、顺序位）；全部管理 / 控制 / 数据子类型；Action 帧各类别；A-MSDU。
 - 顺带：把单个 31KB 的 `wifi_frame_parser.py` 拆成包（`wifi80211/`：radiotap、frame、ie、action、crypto、handshake），命令行入口保持不变。
@@ -78,7 +83,7 @@
 - SAE：“hunting-and-pecking”与 H2E 两种方式，椭圆曲线组 19 / 20 / 21，commit / confirm 帧解析，PMK 推导。
 - OWE：椭圆曲线 Diffie-Hellman。FT：PMK-R0 / PMK-R1 密钥层级。Suite-B 192。
 - 这一阶段密码学最重，椭圆曲线先用 Python 整数手写（学习为目的，不求速度），并与 pycryptodome 的结果交叉验证。
-- 验收：`wpa3-sae`、`wpa3-sae-ext-key-group21`、`wpa3-ft-sae-h2e`、`owe*`、`wpa2-ft-*`、`wpa3-suiteb-192` 推导的 TK / GTK 与测试套件一致。
+- 验收：`wpa3-sae`、`wpa3-sae-ext-key-group21`、`wpa3-ft-sae-h2e`、`owe*`、`wpa2-ft-*`、`wpa3-suiteb-192` 在给定 PMK 的前提下推导的 TK / GTK 与测试套件一致。SAE 的口令 → PMK 另需标准测试向量或自家抓包（见第 2 节）。
 
 ### 阶段 F：解密之后的内容
 - 解密后只做到能验证“解对了”：LLC/SNAP → ARP / IPv4 / IPv6 / UDP / DHCP 的最小解析。
