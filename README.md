@@ -128,4 +128,8 @@ python3 wifi_frame_parser.py --pcap capture.pcap
 2. `ap_print()` 内的 `printf` 换成 `HAL_UART_Transmit`（或重定向 printf 到 UART1）；
 3. USART1 中断接收字节存入环形缓冲，攒到 `\n` 后调用 `parse_cwlap()`；
 4. 主循环每 10s 发一次 `AT+CWLAP`，解析结果打印/上报。
+
+## 协议
+
+[MIT](LICENSE)
 *（内容由AI生成，仅供参考）*
