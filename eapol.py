@@ -75,6 +75,7 @@ def parse(buf, mic_len=None):
 def message_number(e):
     """握手消息号：成对握手 1-4；组密钥握手 "G1"（AP → STA）、"G2"（STA → AP）；认不出返回 None。
     依据 Key Info：M1 = Ack 无 MIC；M3 = Ack + MIC；M4 = 无 Ack、有 MIC、Secure；M2 = 无 Ack、有 MIC、非 Secure、带 SNonce。
+    重新握手时 M2 也带 Secure 位（密钥已装过）：带 SNonce 又带 Key Data（RSN 元素）的是 M2，M4 的 Key Data 为空。
     WPA1 的 M4 没有 Secure 位，和 M2 的位型一样，靠 Nonce 区分：M2 带 SNonce，M4 的 Nonce 全 0。"""
     ki = e["key_info"]
     if ki["pairwise"]:
@@ -83,7 +84,7 @@ def message_number(e):
         if ki["ack"] and ki["mic"]:
             return 3
         if ki["mic"] and not ki["ack"]:
-            if ki["secure"]:
+            if ki["secure"] and not (any(e["nonce"]) and e["data_length"]):
                 return 4
             return 2 if any(e["nonce"]) else 4
         return None

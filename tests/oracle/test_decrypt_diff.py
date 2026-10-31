@@ -5,7 +5,7 @@
   ok         MIC 通过、明文与 tshark 相同
   mgmt       受保护的管理帧（nonce / AAD 规则不同，下一步）
   no_hs      找不到适用的已推出握手（组播用 GTK、重新握手之前的 PTK、FT 等）
-  stale      有握手但解不开（重新握手换了 PTK，加密的 EAPOL 还没跟踪）
+  stale      有握手但解不开
   ours_only  tshark 没解出、我们 MIC 通过（应为 0：多出来的要弄清是怎么回事）
 """
 import collections
@@ -55,12 +55,11 @@ def classify(path, keys):
             if theirs is not None:
                 out["no_hs"] += 1
             continue
-        x = cand[-1]
-        pt, ok, _pn = dec.decrypt_aead(x.tk, x.cipher, f)
+        got = dec.decrypt_frame(done, f)
         if theirs is None:
-            if ok:
+            if got is not None:
                 out["ours_only"] += 1
-        elif ok and pt == theirs["plain"]:
+        elif got is not None and got[1] == theirs["plain"]:
             out["ok"] += 1
         else:
             out["stale"] += 1
@@ -73,13 +72,13 @@ EXPECTED = {
     "wep.pcapng.gz": (0, 0, 0, 0, 0),
     "wpa-Induction.pcap.gz": (203, 0, 0, 0, 0),
     "wpa-ccmp-256.pcapng.gz": (8, 0, 6, 0, 0),
-    "wpa-eap-tls.pcap.gz": (28, 0, 2, 31, 0),
+    "wpa-eap-tls.pcap.gz": (59, 0, 2, 0, 0),
     "wpa-gcmp-256.pcapng.gz": (8, 0, 5, 0, 0),
     "wpa-gcmp.pcapng.gz": (9, 0, 6, 0, 0),
     "wpa-mlo-ccmp.pcapng.gz": (0, 0, 0, 0, 0),
     "wpa-test-decode-mgmt.pcap.gz": (0, 3, 0, 0, 0),
     "wpa-test-decode-tdls.pcap.gz": (6, 0, 2, 0, 0),
-    "wpa-test-decode.pcap.gz": (252, 0, 40, 464, 0),
+    "wpa-test-decode.pcap.gz": (716, 0, 40, 0, 0),
     "wpa1-gtk-rekey.pcapng.gz": (0, 0, 0, 0, 0),
     "wpa2-ft-eap.pcapng.gz": (0, 0, 4, 0, 0),
     "wpa2-ft-psk.pcapng.gz": (0, 0, 17, 0, 0),
@@ -91,7 +90,7 @@ EXPECTED = {
     "wpa3-sae-ext-key-group21.pcapng.gz": (0, 0, 0, 0, 1),
     "wpa3-sae.pcapng.gz": (6, 0, 4, 0, 0),
     "wpa3-suiteb-192.pcapng.gz": (0, 3, 0, 0, 0),
-    "wpa_ptk_extended_key_id.pcap.gz": (8, 0, 12, 11, 0),
+    "wpa_ptk_extended_key_id.pcap.gz": (19, 0, 12, 0, 0),
 }
 
 if __name__ == "__main__":
@@ -103,6 +102,6 @@ if __name__ == "__main__":
         totals = [a + b for a, b in zip(totals, got)]
         check(got == EXPECTED[name], "%s：%s（表里 %s）" % (name, dict(zip(CATEGORIES, got)), dict(zip(CATEGORIES, EXPECTED[name]))))
     check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
-    check(totals[0] == 549 and totals[4] == 3, "共 %d 帧与 tshark 的明文逐字节相同；tshark 解不了而我们解开的 %d 帧（64 字节 PMK）" % (totals[0], totals[4]))
+    check(totals[0] == 1055 and totals[4] == 3, "共 %d 帧与 tshark 的明文逐字节相同；tshark 解不了而我们解开的 %d 帧（64 字节 PMK）" % (totals[0], totals[4]))
     print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
     sys.exit(0 if not failures else 1)

@@ -57,3 +57,22 @@ def decrypt_aead(tk, cipher, frame):
     else:
         pt, ok = c.gcm_decrypt(tk, a2 + pn.to_bytes(6, "big"), aad, body[8:], mic)
     return pt, ok, pn
+
+
+def decrypt_frame(handshakes, frame):
+    """在已推出的握手里找能解开这一帧的 PTK：同一对地址、M2 在这一帧之前的握手，从新到旧逐个试（重新握手之后到新密钥
+    装上之前的帧、Extended Key ID 下新旧两把密钥同时有效，都要靠 MIC 来分辨）。返回 (握手, 明文) 或 None。
+    目前只处理 CCMP / GCMP 的单播数据帧。"""
+    h = frame.h
+    if h["type"] != 2 or not h["protected"]:
+        return None
+    pair = {h["addr1"], h["addr2"]}
+    for hs in sorted((x for x in handshakes if {x.ap, x.sta} == pair and x.frames["m2"] < frame.n and x.cipher in MIC_LEN),
+                     key=lambda x: -x.frames["m2"]):
+        try:
+            pt, ok, _pn = decrypt_aead(hs.tk, hs.cipher, frame)
+        except ValueError:
+            continue
+        if ok:
+            return hs, pt
+    return None

@@ -258,11 +258,19 @@ AAD = 帧控制（第 1 字节只留 `& 0x8F`；第 2 字节清掉重试 / 省�
 **结果**：样例里 tshark 解出明文的 AEAD 数据帧，549 帧与它的明文逐字节相同、MIC 全部通过。AAD 规则一次就对了，没有靠试错凑。
 另有 3 帧 tshark 解不开、我们解开了（owe-3-dh-groups 2 帧、wpa3-sae-ext-key-group21 1 帧）：它们用 64 字节的 PMK，tshark 4.4 加载不了。
 **没解开的，固定成数字**（`tests/oracle/test_decrypt_diff.py`）：
-- stale 506 帧：重新握手之后换了 PTK（wpa-test-decode 464、wpa-eap-tls 31、wpa_ptk_extended_key_id 11），重新握手的 EAPOL 是加密的，要边解密边跟踪（D4c-2）。
+- stale 506 帧：重新握手之后换了 PTK（wpa-test-decode 464、wpa-eap-tls 31、wpa_ptk_extended_key_id 11）——D4c-2 已全部解开，见下。
 - no_hs 115 帧：组播 / 广播 92 帧（GTK，要从 M3 / 组密钥握手的 Key Data 里解出）、FT 单播 21 帧（阶段 E）、TDLS 对端直连 2 帧（TPK）。
 - mgmt 6 帧：受保护的管理帧（PMF），nonce 和 AAD 的规则不同（wpa-test-decode-mgmt 3、wpa3-suiteb-192 3）。
 **测试**：`tests/test_decrypt.py` 用 pycryptodome 当独立加密方并手写 AAD，覆盖样例里没有的形态（非 QoS、四地址、HT 控制、子类型 10、被屏蔽的各位、分片号）；
 对 `decrypt80211.py` 的 13 处改动做了变异检查：全部被抓住（子类型掩码这一个起初只有空缺的测试漏掉，补了子类型 10 的用例后抓住）。
+
+### 重新握手：边解密边跟踪（D4c-2）
+重新握手（换 PTK）的 EAPOL 是被当前 PTK 加密的数据帧。`track()` 遇到受保护的数据帧，先用已推出的握手解开，是 EAPOL 就照常配对 M1 / M2、验 MIC。
+`decrypt80211.decrypt_frame` 对同一对地址从新到旧逐个 PTK 试，靠 MIC 分辨——新密钥装上之前的帧、Extended Key ID 下新旧两把密钥同时有效，都用得上，不用去读 Key ID。
+**结果**：握手 23 -> 30 个（wpa-eap-tls 1 -> 4，wpa-test-decode 1 -> 3，wpa_ptk_extended_key_id 1 -> 3），30 个全部 MIC 自证，其中 26 个也被 tshark 印证；
+tshark 多出来的 KCK / KEK / TK 在这三个样例里归零（剩下的只有 FT 和 TDLS）。数据帧：与 tshark 明文逐字节相同的 AEAD 帧 549 -> 1055，stale 506 -> 0。
+**踩到的坑**：重新握手的 M2 也带 Secure 位（密钥装过了），按 Key Info 的老规则会被当成 M4——M2 带 SNonce 和 Key Data（RSN 元素），M4 的 Key Data 为空，分类加上这一条（与 tshark 对 109 个 EAPOL 的消息号仍一致）。
+变异检查：分类条件、"受保护帧才去解密"的接线被抓住；有两个等价改动没被抓：去掉 `any(nonce)`（后面一行的兜底使结果相同），以及"解出来是不是 LLC / EAPOL"的检查（非 EAPOL 的明文交给 eapol.parse 也得 None）。
 TKIP、WEP 与 TKIP 变异体的击杀是下一小步。
 
 ### 阶段 D：加密与密钥层（逐个套件）

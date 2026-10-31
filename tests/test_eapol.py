@@ -52,7 +52,10 @@ M = lambda ki, nonce=b"\x01" * 32: eapol.parse(key_frame(ki, nonce=nonce))["mess
 check(M(0x008a) == 1 and M(0x13ca) == 3 and M(0x010a) == 2 and M(0x030a) == 4, "WPA2：0x008a = M1，0x13ca = M3，0x010a = M2，0x030a = M4")
 check(M(0x0088) == 1 and M(0x13c8) == 3 and M(0x0108) == 2 and M(0x0308) == 4, "版本 0（AKM 决定）：同样的位型")
 check(M(0x010a, nonce=bytes(32)) == 4 and M(0x010a) == 2, "无 Ack、有 MIC、非 Secure：Nonce 全 0 是 M4（WPA1 的 M4 没有 Secure 位），非 0 是 M2")
-check(M(0x030a, nonce=bytes(32)) == 4 and M(0x030a, nonce=b"\x01" * 32) == 4, "带 Secure 位就是 M4，不看 Nonce")
+check(M(0x030a, nonce=bytes(32)) == 4 and M(0x030a, nonce=b"\x01" * 32) == 4, "带 Secure 位、Key Data 为空就是 M4，不看 Nonce")
+MD = lambda ki, nonce, data: eapol.parse(key_frame(ki, nonce=nonce, data=data))["message"]       # noqa: E731
+check(MD(0x030a, b"\x01" * 32, b"\x30\x14" + bytes(20)) == 2, "重新握手的 M2：带 Secure 位，但有 SNonce 和 Key Data（RSN 元素）= M2")
+check(MD(0x030a, bytes(32), b"\x30\x14" + bytes(20)) == 4 and MD(0x030a, b"\x01" * 32, b"") == 4, "Nonce 全 0 或 Key Data 为空，仍是 M4")
 check(M(0x018a) == 3 and M(0x01ca) == 3, "成对 + Ack + MIC 就是 M3，不要求 Install 位（有没有都是）")
 check(eapol.parse(key_frame(0x0080))["message"] is None and eapol.parse(key_frame(0x0280))["message"] is None, "组消息：只有 Ack 没有 MIC，不是 G1")
 check(eapol.parse(key_frame(0x1382))["message"] == "G1", "组密钥握手：成对位为 0、Ack + MIC = G1")

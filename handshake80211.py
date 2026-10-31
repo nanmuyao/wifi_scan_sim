@@ -14,6 +14,7 @@ import hmac
 from collections import namedtuple
 
 import crypto80211  # noqa: F401  (保证 kdf80211 的依赖可导入)
+import decrypt80211 as dec
 import eapol
 import frames80211 as fr
 import ie
@@ -156,6 +157,17 @@ def _mac(s):
     return bytes.fromhex(s.replace(":", ""))
 
 
+def _decrypted_eapol(done, f):
+    """重新握手的 EAPOL 报文在数据帧里被当前的 PTK 加密：用已推出的握手解开，是 EAPOL 就返回报文。"""
+    got = dec.decrypt_frame(done, f)
+    if got is None:
+        return None
+    pt = got[1]
+    if pt[:6] != fr.LLC_SNAP or pt[6:8] != fr.ETHERTYPE_EAPOL:
+        return None
+    return pt[8:]
+
+
 def track(frames, keys):
     """frames：frames80211.iter_frames 的结果（列表）。返回 (成功的握手 [Handshake], 失败 / 跳过的 [(帧号, 原因)])。"""
     ssids = ssids_by_bssid(frames)
@@ -164,6 +176,8 @@ def track(frames, keys):
     done, skipped = [], []
     for f in frames:
         raw = fr.eapol_payload(f)
+        if raw is None and f.h["protected"]:
+            raw = _decrypted_eapol(done, f)
         e = eapol.parse(raw) if raw is not None else None
         if e is None or "key_info" not in e or not e["key_info"]["pairwise"]:
             continue
