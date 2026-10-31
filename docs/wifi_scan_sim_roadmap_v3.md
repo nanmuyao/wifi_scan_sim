@@ -216,6 +216,14 @@ Michael 用 802.11i 附录 H 的 6 个链式向量（密钥是上一步的输出
 **一个预告**：旧的 `wpa2_handshake.py` 的 `ccmp_build_aad` 把 FC 高字节只保留 ToDS / FromDS（`& 0x03`），标准里 Protected 位在 AAD 里是置 1 的、分片位也保留；
 旧实现很可能只是自己加密自己解密才对得上，会在真实帧上 MIC 失败。AAD 的规则放到 D4 用真实帧裁决，不凭记忆写。
 
+### 密钥推导原语（D3a）
+`kdf80211.py`：PRF-SHA1（WPA / WPA2 的 PTK 推导）、KDF-SHA256 / 384 / 512（SAE、PSK-SHA256、Suite-B 192 等）、AES-CMAC（EAPOL-Key 的 MIC 版本 3、BIP）、
+AES key wrap（EAPOL-Key 的 Key Data，描述符版本 2、3、0）、RC4 密钥解包（描述符版本 1 / WPA1）。
+**验证**：AES-CMAC 用 RFC 4493 的两个子密钥和四个向量，加 100 组随机输入与 pycryptodome 的 CMAC 对照；AES key wrap 用 RFC 3394 的三个向量（128 / 256 位 KEK，128 / 256 位密钥）。
+**PRF / KDF 目前没有独立的验证**：我没有能可靠引用的向量，测试只核对了定义（计数从哪开始、字节序、拼接顺序）。
+它们由 D4 用 tshark 在 EAPOL 帧上给出的 KCK / KEK、在数据帧上给出的 TK（`wlan.analysis.kck / kek / tk`，`wpa3-sae` 的 TK `20a2e28f…` 与 Wireshark 测试里的期望值一致）逐把对照。
+**tshark 的密钥字段**：KCK / KEK 在 EAPOL 帧上，PMK / TK / GTK 在数据帧上。这把尺子对所有套件通用。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
