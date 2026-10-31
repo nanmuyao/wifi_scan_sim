@@ -46,7 +46,14 @@
 分片 12/13 等），仍让 tshark 当标准答案。`parse_mac_header` 改成变长帧头（addr4 / QoS Control / HT Control，
 并给出 DA / SA / BSSID）；24 个样例和 31 种合成帧头与 tshark 全部一致，帧体起点用 tshark 找到的 LLC 头独立验证。
 **遗留**：`wpa2_handshake.py` 的 CCMP AAD 构造仍按 3 地址帧（24/26 字节）算，4 地址帧和带 HT 控制字段的帧要在阶段 D 一并改。
-还没对照的帧层内容：radiotap 各字段、A-MSDU 内部结构、Action 帧各类别，下一步做。
+### radiotap（B2）
+`radiotap.py` 解析 radiotap 字段表里 0-27 位的全部字段、多位图（多天线）、厂商命名空间、TLV，以及由 HT 的 MCS 算数据速率。
+与 tshark 在 24 个样例的 6471 帧上对照：头长度、TSFT、flags、速率、信道、信号、天线、rx flags、质量、MCS、A-MPDU、timestamp 全部一致。
+**发现**：5 个样例的 radiotap flags 标明“帧末尾带 4 字节 FCS”（`flags & 0x10`），原来的解析器把 FCS 当成帧体；现在剥掉，并用 CRC-32 校验
+（5397 帧与 tshark 的校验状态一致）。**遗留**：`wpa2_handshake.py` 有自己的偏移逻辑，不剥 FCS，阶段 D 要一并改（否则 MIC 会把 FCS 算进去）。
+**没有被样例验证的**：TLV 部分起点对齐到 4 字节（按规范写，只有单元测试覆盖）；VHT / HE / HE-MU 字段只解码、没有样例对照，
+也没有 VHT / HE 速率换算（这些样例里没有）。
+还没对照的帧层内容：A-MSDU 内部结构、Action 帧各类别，下一步做。
 
 ## 2. 验证方法（贯穿所有阶段）
 

@@ -17,8 +17,10 @@ scapy 仅用于【生成】标准测试帧；解析路径完全是手写字节�
 """
 
 import struct
+import zlib
 
 import capture
+import radiotap
 
 # ---------------------------------------------------------------------------
 # 802.11 帧类型/子类型查表
@@ -491,14 +493,28 @@ def parse_pcap_file(path):
     for pkt in cap.packets:
         body = pkt.data
         dot11 = body
+        rt = fcs = fcs_ok = None
         if pkt.linktype == 127:      # Radiotap 链路层
-            dot11 = strip_radiotap(body)
+            try:
+                rt = radiotap.parse(body)
+            except ValueError as exc:
+                results.append({"t": pkt.ts, "linktype": 127, "incl": pkt.caplen, "orig": pkt.origlen,
+                                "raw": 0, "error": "radiotap: %s" % exc})
+                continue
+            dot11 = body[rt["length"]:]
+            if rt["fcs_included"] and len(dot11) >= 4:     # flags 的 FCS 位：帧末尾 4 字节是 FCS，不是帧体
+                dot11, fcs = dot11[:-4], struct.unpack("<I", dot11[-4:])[0]
+                fcs_ok = zlib.crc32(dot11) == fcs
         elif pkt.linktype == 1:      # Ethernet（转发/本机抓包场景，剥 14 字节头）
             dot11 = body[14:] if len(body) > 14 else body
         rec = {
             "t": pkt.ts, "linktype": pkt.linktype,
             "incl": pkt.caplen, "orig": pkt.origlen, "raw": len(dot11),
         }
+        if rt is not None:
+            rec["radiotap"] = rt
+        if fcs is not None:
+            rec["fcs"], rec["fcs_ok"] = fcs, fcs_ok
         if len(dot11) < 2:
             rec["error"] = "帧过短"
             results.append(rec)

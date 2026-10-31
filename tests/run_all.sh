@@ -20,6 +20,7 @@ done
 run "样例下载脚本（离线）" python3 tests/oracle/test_fetch_samples.py
 run "差分工具（tshark 对照）" python3 tests/oracle/test_diff.py
 run "MAC 头逐位检查" python3 tests/test_mac_header.py
+run "radiotap 解析" python3 tests/test_radiotap.py
 run "radiotap 头剥离" python3 tests/test_radiotap_strip.py
 run "解析结果对照 tshark（24 个公开样例）" python3 tests/oracle/test_samples_diff.py
 run "抓包读取对照 tshark（24 个公开样例）" python3 tests/oracle/test_capture_oracle.py

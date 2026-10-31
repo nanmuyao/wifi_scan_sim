@@ -35,6 +35,14 @@ check(details == [(1, "seq", 5, 6)], "不一致明细带帧号、标准答案、
 stats, _ = diff.compare([frame(type_subtype=8)] * 2, [frame(type_subtype=8)])
 check(stats["type_subtype"] == {"ok": 1, "diff": 0, "missing": 1}, "我们少解析了帧：多出来的算 missing")
 
+stats, _ = diff.compare([frame(type_subtype=8)], [frame(type_subtype=8)])
+o, u = [frame(**{"type_subtype": 8})], [frame(**{"type_subtype": 8})]
+o[0]["seq"], u[0]["seq"] = 72.2222, 72.22222222222221
+stats, details = diff.compare(o, u)
+check(stats["seq"]["ok"] == 1, "浮点值按 tshark 的 6 位有效数字取整后比较：72.2222 ≈ 72.22222222")
+o[0]["seq"], u[0]["seq"] = 72.2222, 72.3
+check(diff.compare(o, u)[0]["seq"]["diff"] == 1, "浮点值差得多就是不一致")
+
 print("== 端到端：仓库自带的抓包，tshark 与我们逐帧一致 ==")
 check(diff.tshark_version().startswith(diff.TSHARK_MAJOR_MINOR), "tshark 是 %s.x（实际 %s）" % (diff.TSHARK_MAJOR_MINOR, diff.tshark_version()))
 for rel in ("tests/fixtures/wpa2_handshake.pcap", "wifi_demo_parse.pcap", "demo.pcap"):

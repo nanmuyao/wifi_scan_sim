@@ -40,6 +40,23 @@ FIELDS = [
     ("ackpolicy", "wlan.qos.ack"),
     ("amsdu", "wlan.qos.amsdupresent"),
     ("htc", "wlan.htc"),
+    ("rt_length", "radiotap.length"),
+    ("mactime", "radiotap.mactime"),
+    ("rt_flags", "radiotap.flags"),
+    ("datarate", "radiotap.datarate"),
+    ("freq", "radiotap.channel.freq"),
+    ("chan_flags", "radiotap.channel.flags"),
+    ("antsignal", "radiotap.dbm_antsignal"),
+    ("antnoise", "radiotap.dbm_antnoise"),
+    ("antenna", "radiotap.antenna"),
+    ("rxflags", "radiotap.rxflags"),
+    ("db_antsignal", "radiotap.db_antsignal"),
+    ("quality", "radiotap.quality"),
+    ("mcs_index", "radiotap.mcs.index"),
+    ("ampdu_ref", "radiotap.ampdu.reference"),
+    ("rt_ts", "radiotap.timestamp.ts"),
+    ("fcs", "wlan.fcs"),
+    ("fcs_ok", "wlan.fcs.status"),
     ("llc_dsap", "llc.dsap"),      # tshark 在帧体里找到的 LLC：我们的头长度错了，读到的首字节就对不上
 ]
 TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number")]
@@ -57,10 +74,15 @@ def _norm(name, v):
         return None
     if name == "type_subtype":
         return int(v, 16)
-    if name in ("seq", "duration", "frag", "priority"):
+    if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
+                "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts"):
         return int(v)
-    if name in ("ackpolicy", "htc", "llc_dsap"):
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs"):
         return int(v, 0)
+    if name == "datarate":
+        return float(v)
+    if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
+        return {"1": True, "0": False}.get(v)
     if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu"):
         return v == "True"
     return v
@@ -69,7 +91,7 @@ def _norm(name, v):
 def tshark_frames(path):
     """tshark 对每一帧的解析结果：[{字段名: 值或 None, "tags": [...], "ext_tags": [...]}]"""
     cols = FIELDS + TSHARK_EXTRA
-    cmd = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=f"]
+    cmd = ["tshark", "-r", path, "-o", "wlan.check_checksum:TRUE", "-T", "fields", "-E", "separator=/t", "-E", "occurrence=f"]
     for _, f in FIELDS:
         cmd += ["-e", f]
     # 信息元素编号一帧里有很多个：单独取全部出现
@@ -96,10 +118,12 @@ def tshark_frames(path):
 
 def ours_frames(path):
     """本项目解析器对每一帧的解析结果，字段与 tshark_frames 对齐。读不开的文件抛异常。"""
+    import radiotap
     import wifi_frame_parser as w
     _, recs = w.parse_pcap_file(path)
     out = []
     for r in recs:
+        rt = r.get("radiotap") or {}
         has_type = "ftype" in r
         out.append({
             "type_subtype": (r["ftype"] << 4 | r["fsubtype"]) if has_type else None,
@@ -124,6 +148,23 @@ def ours_frames(path):
             "amsdu": None if "qos_amsdu" not in r else bool(r["qos_amsdu"]),
             "htc": r.get("htc"),
             "llc_dsap": r.get("llc_dsap"),
+            "rt_length": rt.get("length"),
+            "mactime": rt.get("tsft"),
+            "rt_flags": rt.get("flags"),
+            "datarate": radiotap.data_rate_mbps(rt) if rt else None,
+            "freq": (rt.get("channel") or {}).get("freq"),
+            "chan_flags": (rt.get("channel") or {}).get("flags"),
+            "antsignal": rt.get("antsignal"),
+            "antnoise": rt.get("antnoise"),
+            "antenna": rt.get("antenna"),
+            "rxflags": rt.get("rx_flags"),
+            "db_antsignal": rt.get("db_antsignal"),
+            "quality": rt.get("lock_quality"),
+            "mcs_index": (rt.get("mcs") or {}).get("index"),
+            "ampdu_ref": (rt.get("ampdu") or {}).get("reference"),
+            "rt_ts": (rt.get("timestamp") or {}).get("ts"),
+            "fcs": r.get("fcs"),
+            "fcs_ok": r.get("fcs_ok"),
         })
     return out
 
@@ -140,7 +181,7 @@ def compare(oracle, ours):
                 continue
             if got is None:
                 stats[name]["missing"] += 1
-            elif got == want:
+            elif got == want or (isinstance(want, float) and abs(got - want) < 1e-3):    # tshark 把浮点数四舍五入到 6 位有效数字
                 stats[name]["ok"] += 1
             else:
                 stats[name]["diff"] += 1
