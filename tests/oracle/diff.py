@@ -148,6 +148,8 @@ def ours_frames(path):
             "amsdu": None if "qos_amsdu" not in r else bool(r["qos_amsdu"]),
             "htc": r.get("htc"),
             "llc_dsap": r.get("llc_dsap"),
+            "tags": r.get("ie_ids"),
+            "ext_tags": r.get("ie_ext_ids"),
             "rt_length": rt.get("length"),
             "mactime": rt.get("tsft"),
             "rt_flags": rt.get("flags"),
@@ -169,14 +171,23 @@ def ours_frames(path):
     return out
 
 
+LIST_FIELDS = [name for name, _ in TSHARK_EXTRA]       # 信息元素编号列表：按顺序整个比较
+
+
 def compare(oracle, ours):
     """返回 {字段: {"ok": n, "diff": n, "missing": n}} 和不一致明细 [(帧号, 字段, 标准答案, 我们)]。"""
-    stats = {name: {"ok": 0, "diff": 0, "missing": 0} for name, _ in FIELDS}
+    names = [n for n, _ in FIELDS] + LIST_FIELDS
+    stats = {name: {"ok": 0, "diff": 0, "missing": 0} for name in names}
     details = []
     for i, o in enumerate(oracle):
         u = ours[i] if i < len(ours) else {}
-        for name, _ in FIELDS:
-            want, got = o[name], u.get(name)
+        for name in names:
+            want, got = o.get(name), u.get(name)
+            if name in LIST_FIELDS and not want:
+                if got:                       # tshark 没列出元素，我们却列出来了（例如把加密的帧体当元素解析）
+                    stats[name]["diff"] += 1
+                    details.append((i + 1, name, want, got))
+                continue
             if want is None:
                 continue
             if got is None:
@@ -204,7 +215,8 @@ def diff_file(path):
 
 
 def print_report(results, show_details=5):
-    total = {name: {"ok": 0, "diff": 0, "missing": 0} for name, _ in FIELDS}
+    names = [n for n, _ in FIELDS] + LIST_FIELDS
+    total = {name: {"ok": 0, "diff": 0, "missing": 0} for name in names}
     opened = 0
     for r in results:
         name = os.path.basename(r["path"])
@@ -213,15 +225,15 @@ def print_report(results, show_details=5):
             continue
         opened += 1
         s = r["stats"]
-        cells = " ".join("%s=%d/%d/%d" % (n, s[n]["ok"], s[n]["diff"], s[n]["missing"]) for n, _ in FIELDS)
+        cells = " ".join("%s=%d/%d/%d" % (n, s[n]["ok"], s[n]["diff"], s[n]["missing"]) for n in names)
         print("%-42s tshark %5d 帧  我们 %5d 帧  %s" % (name, r["frames"], r["ours_frames"], cells))
-        for n, _ in FIELDS:
+        for n in names:
             for k in total[n]:
                 total[n][k] += s[n][k]
         for d in r["details"][:show_details]:
             print("      帧 %d %s: tshark=%r 我们=%r" % d)
     print("\n能打开 %d / %d 个抓包。字段统计（一致/不一致/我们没解析）：" % (opened, len(results)))
-    for n, _ in FIELDS:
+    for n in names:
         print("  %-13s %d / %d / %d" % (n, total[n]["ok"], total[n]["diff"], total[n]["missing"]))
 
 

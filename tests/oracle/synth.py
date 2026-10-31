@@ -16,9 +16,9 @@ def fc_word(ftype, subtype, tods=0, fromds=0, morefrag=0, retry=0, pwr=0, moreda
 
 
 def frame(ftype, subtype, tods=0, fromds=0, order=0, seq=7, frag=0, morefrag=0, qos=None, htc=None,
-          addr4=None, body=b"\xaa\xaa\x03\x00\x00\x00\x08\x00", duration=44):
+          addr4=None, body=b"\xaa\xaa\x03\x00\x00\x00\x08\x00", duration=44, prot=0):
     """qos: QoS Control 的 16 位值；htc: HT Control 的 32 位值；addr4：只在 ToDS=FromDS=1 的帧里有。"""
-    h = struct.pack("<HH", fc_word(ftype, subtype, tods, fromds, morefrag=morefrag, order=order), duration)
+    h = struct.pack("<HH", fc_word(ftype, subtype, tods, fromds, morefrag=morefrag, order=order, prot=prot), duration)
     h += A1 + A2 + A3 + struct.pack("<H", seq << 4 | frag)
     if tods and fromds:
         h += addr4 if addr4 is not None else A4
@@ -33,9 +33,34 @@ def qos_word(tid=0, eosp=0, ack_policy=0, amsdu=0, txop=0):
     return tid | eosp << 4 | ack_policy << 5 | amsdu << 7 | txop << 8
 
 
+def ie(eid, data=b"", ext=None):
+    """一个信息元素；ext 不为 None 时是扩展元素（ID 255 + 扩展 ID）。"""
+    if ext is not None:
+        data = bytes([ext]) + data
+        eid = 255
+    return bytes([eid, len(data)]) + data
+
+
+IES = ie(0, b"synth") + ie(1, b"\x82\x84\x8b\x96") + ie(3, b"\x06") + ie(221, b"\x00\x11\x22\x01\x02") + \
+    ie(221, b"\x00\x11\x23\x02") + ie(50, b"\x0c\x12") + ie(7, b"US \x01\x0b\x14")
+
+
+def mgmt(subtype, fixed, ies=IES, **kw):
+    return frame(0, subtype, body=b"\x00" * fixed + ies, **kw)
+
+
 def cases():
     """[(说明, 帧字节)]"""
     out = []
+    # 管理帧：固定部分之后是信息元素；同一 ID 出现两次（221）、扩展元素、各子类型的固定部分长度
+    for name, sub, fixed in (("Association Request", 0, 4), ("Association Response", 1, 6),
+                             ("Reassociation Request", 2, 10), ("Reassociation Response", 3, 6),
+                             ("Probe Request", 4, 0), ("Probe Response", 5, 12), ("Beacon", 8, 12),
+                             ("Disassociation", 10, 2), ("Authentication (open)", 11, 6), ("Deauthentication", 12, 2)):
+        out.append(("%s + elements" % name, mgmt(sub, fixed)))
+    out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=114))))
+    out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
+    out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))
     for tods, fromds in ((0, 0), (0, 1), (1, 0), (1, 1)):
         out.append(("Data ToDS=%d FromDS=%d" % (tods, fromds), frame(2, 0, tods, fromds)))
         out.append(("QoS Data ToDS=%d FromDS=%d" % (tods, fromds), frame(2, 8, tods, fromds, qos=qos_word(tid=5))))

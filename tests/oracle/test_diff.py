@@ -32,6 +32,11 @@ check(stats["type_subtype"] == {"ok": 2, "diff": 0, "missing": 0}, "类型全部
 check(stats["ra"] == {"ok": 1, "diff": 0, "missing": 1}, "我们没解析出 ra 算 missing")
 check(stats["seq"] == {"ok": 0, "diff": 1, "missing": 0}, "序号不同算 diff；标准答案没有序号的帧不参与对比")
 check(details == [(1, "seq", 5, 6)], "不一致明细带帧号、标准答案、我们的值")
+o, u = [frame(type_subtype=8)], [frame(type_subtype=8)]
+o[0]["tags"], u[0]["tags"] = [], [0, 1]
+check(diff.compare(o, u)[0]["tags"]["diff"] == 1, "tshark 没列元素而我们列了：算不一致（不会被「标准答案为空就跳过」放过）")
+o[0]["tags"], u[0]["tags"] = [], None
+check(diff.compare(o, u)[0]["tags"] == {"ok": 0, "diff": 0, "missing": 0}, "两边都没有元素：不参与")
 stats, _ = diff.compare([frame(type_subtype=8)] * 2, [frame(type_subtype=8)])
 check(stats["type_subtype"] == {"ok": 1, "diff": 0, "missing": 1}, "我们少解析了帧：多出来的算 missing")
 
@@ -45,11 +50,13 @@ check(diff.compare(o, u)[0]["seq"]["diff"] == 1, "浮点值差得多就是不一
 
 print("== 端到端：仓库自带的抓包，tshark 与我们逐帧一致 ==")
 check(diff.tshark_version().startswith(diff.TSHARK_MAJOR_MINOR), "tshark 是 %s.x（实际 %s）" % (diff.TSHARK_MAJOR_MINOR, diff.tshark_version()))
-for rel in ("tests/fixtures/wpa2_handshake.pcap", "wifi_demo_parse.pcap", "demo.pcap"):
+# 已知缺口：Action 帧体里的元素我们还没解析（Action 帧各类别，阶段 B 之后）
+for rel, gaps in (("tests/fixtures/wpa2_handshake.pcap", {}), ("wifi_demo_parse.pcap", {"tags": (0, 1)}), ("demo.pcap", {"tags": (0, 1)})):
     r = diff.diff_file(os.path.join(ROOT, rel))
-    bad = sum(v["diff"] + v["missing"] for v in r["stats"].values()) if r["stats"] else -1
-    check(r["error"] is None and r["frames"] == r["ours_frames"] > 0 and bad == 0,
-          "%s：%d 帧，不一致/没解析共 %d" % (rel, r["frames"], bad))
+    bad = sum(v["diff"] + v["missing"] for f_, v in r["stats"].items() if f_ not in gaps) if r["stats"] else -1
+    got_gaps = {f_: (v["diff"], v["missing"]) for f_, v in r["stats"].items() if f_ in gaps} if r["stats"] else {}
+    check(r["error"] is None and r["frames"] == r["ours_frames"] > 0 and bad == 0 and got_gaps == gaps,
+          "%s：%d 帧，已知缺口 %s，之外不一致/没解析共 %d" % (rel, r["frames"], got_gaps, bad))
 
 print("== 合成的头部变体（4 地址、QoS、HT Control、分片等），tshark 当标准答案 ==")
 import tempfile  # noqa: E402

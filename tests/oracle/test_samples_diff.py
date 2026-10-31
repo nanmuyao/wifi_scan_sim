@@ -14,6 +14,15 @@ import diff  # noqa: E402
 import fetch_samples  # noqa: E402
 
 MIN_COMPARED_TYPE_SUBTYPE = 6400      # 实测 6461
+# 已知缺口：字段 -> (不一致帧数, 没解析帧数)，24 个样例合计，必须精确相等（变好、变坏都要改这张表）。
+# 其余字段一律要求 0 / 0。
+KNOWN_GAPS = {
+    # 数据帧里的 EAPOL-Key：tshark 会读 Key Data 里的 RSN 元素（阶段 D）
+    # 4 帧 Multi-Link 元素里嵌套的子元素：tshark 展开了，我们不展开（阶段 C，解码 Multi-Link）
+    "tags": (2, 43),
+    # 8 帧 SAE 认证：帧体不是元素序列，要按曲线组的长度跳过 scalar / element（阶段 E）；另有 2 帧同上的 Multi-Link
+    "ext_tags": (2, 8),
+}
 failures = []
 
 
@@ -31,15 +40,23 @@ except Exception as exc:
 
 d = fetch_samples.SAMPLE_DIR
 compared = 0
+gaps = {}
 for name in sorted(os.listdir(d)):
     r = diff.diff_file(os.path.join(d, name))
     if r["error"]:
         check(False, "%s：无法读取 %s" % (name, r["error"]))
         continue
-    bad = sum(v["diff"] + v["missing"] for v in r["stats"].values())
     compared += r["stats"]["type_subtype"]["ok"]
+    for field, v in r["stats"].items():
+        g = gaps.setdefault(field, [0, 0])
+        g[0] += v["diff"]
+        g[1] += v["missing"]
+    bad = sum(v["diff"] + v["missing"] for f_, v in r["stats"].items() if f_ not in KNOWN_GAPS)
     check(r["frames"] == r["ours_frames"] and bad == 0,
-          "%s：%d 帧，不一致/没解析共 %d%s" % (name, r["frames"], bad, ("，例如 %s" % (r["details"][:2],)) if bad else ""))
+          "%s：%d 帧，已知缺口之外不一致/没解析共 %d%s" % (name, r["frames"], bad,
+                                         ("，例如 %s" % ([x for x in r["details"] if x[1] not in KNOWN_GAPS][:2],)) if bad else ""))
+for field, want in KNOWN_GAPS.items():
+    check(tuple(gaps.get(field, (0, 0))) == want, "已知缺口 %s：不一致/没解析 = %s（表里写的 %s；不等就更新这张表或修缺口）" % (field, tuple(gaps.get(field, (0, 0))), want))
 check(compared >= MIN_COMPARED_TYPE_SUBTYPE, "类型字段共对比 %d 帧（下限 %d）" % (compared, MIN_COMPARED_TYPE_SUBTYPE))
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)

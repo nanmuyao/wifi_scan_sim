@@ -20,6 +20,7 @@ import struct
 import zlib
 
 import capture
+import ie
 import radiotap
 
 # ---------------------------------------------------------------------------
@@ -537,6 +538,11 @@ def parse_pcap_file(path):
                     rec.update({"qos_" + k: v for k, v in h["qos"].items()})
                 body = dot11[h["header_len"]:]
                 if fam == "Management":
+                    off = ie.FIXED_LEN.get(h["subtype"])
+                    sae_auth = h["subtype"] == 11 and len(body) >= 2 and struct.unpack("<H", body[:2])[0] == 3
+                    if off is not None and not h["protected"] and len(body) >= off and not sae_auth:    # SAE 认证帧体不是元素序列，阶段 E
+                        els, rec["ie_truncated"] = ie.walk(body[off:])
+                        rec["ie_ids"], rec["ie_ext_ids"] = ie.ids(els)
                     m = parse_mgmt_frame(h, body)
                     if m:
                         if "error" in m:
