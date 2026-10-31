@@ -72,6 +72,11 @@ def track_group(frames, done):
     M3 按 ANonce 找到它属于哪个握手，G1 在这对地址的握手里从新到旧试；两者都先用 KCK 验 MIC，再用 KEK 解 Key Data。"""
     out = []
     for f in frames:
+        if f.h["type"] == 0 and f.h["subtype"] == 3 and not f.h["protected"]:        # 重关联响应：FT 漫游后新 AP 的组密钥在 FTE 的子元素里
+            gk = _ft_group_key(f, done)
+            if gk is not None:
+                out.append(gk)
+            continue
         raw = fr.eapol_payload(f)
         if raw is None and f.h["protected"]:
             raw = hs._decrypted_eapol(done, f)
@@ -117,6 +122,35 @@ def _rsn_field(frames, field, names, done=(), guess=None):
         for x in done:
             fallback.setdefault(x.ap, guess(x))
     return dict(fallback, **out)
+
+
+def _ft_group_key(f, done):
+    """重关联响应的 FTE：子元素 2 = GTK：密钥序号(2，小端，低 2 位) ‖ 密钥长度(1) ‖ RSC(8) ‖ AES 包装的 GTK（长度 + 8）；
+    子元素 4 = IGTK：密钥序号(2) ‖ IPN(6) ‖ 密钥长度(1) ‖ 包装的 IGTK。用这对地址的握手（包括漫游得到的）的 KEK 解，完整性校验通过才算。"""
+    h = f.h
+    d = ie.decode_all(ie.walk(f.body[ie.FIXED_LEN[3]:])[0])
+    fte = d.get("fte")
+    if not fte:
+        return None
+    subs = {}
+    for sid, body in fte["subelements"]:
+        subs.setdefault(sid, body)
+    g = subs.get(2)
+    if g is None or len(g) < 11 + 24 or (len(g) - 11) % 8:
+        return None
+    ap, sta = h["addr2"], h["addr1"]
+    for x in sorted((x for x in done if x.ap == ap and x.sta == sta and x.frames["m2"] < f.n), key=lambda x: -x.frames["m2"]):
+        gtk, ok = kdf80211.aes_key_unwrap(x.kek, g[11:])
+        if not ok or len(gtk) != g[2]:
+            continue
+        igtk = None
+        ig = subs.get(4)
+        if ig is not None and len(ig) >= 9 + 24 and (len(ig) - 9) % 8 == 0:
+            key, ok2 = kdf80211.aes_key_unwrap(x.kek, ig[9:])
+            if ok2 and len(key) == ig[8]:
+                igtk = (ig[0] | ig[1] << 8, bytes(ig[2:8]), key)
+        return GroupKey(f.n, ap, g[0] & 3, True, gtk, igtk, "FT")
+    return None
 
 
 def group_ciphers(frames, done=()):

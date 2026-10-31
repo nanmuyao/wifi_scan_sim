@@ -15,6 +15,8 @@ import eapol  # noqa: E402
 import frames80211 as fr  # noqa: E402
 import handshake80211 as hs  # noqa: E402
 import ft80211  # noqa: E402
+import groupkeys80211 as gk  # noqa: E402
+import kdf80211  # noqa: E402
 import ie  # noqa: E402
 import synth  # noqa: E402
 import wpa2_handshake as old  # noqa: E402
@@ -372,6 +374,59 @@ done, sk = run(init + [roam_frame(9, "sha256", PSK32, 16, prot=1)[0]], KEYS9)
 check(len(done) == 1 and not sk, "受保护（加密）的重关联请求：看不懂内容，忽略")
 done, sk = run([roam_frame(9, "sha256", PSK32, 16)[0]], [("wpa-psk", PSK32.hex())])
 check(done == [] and sk and "空中漫游" in sk[0][1], "没有初始握手：没有 PMK-R0 可用，不能凭空产生握手，说明原因")
+
+print("== 漫游后新 AP 的 GTK / IGTK（重关联响应 FTE 的子元素，用漫游得到的 KEK 包装）==")
+GTK_ = bytes(range(60, 76))
+IGTK_ = bytes(range(80, 96))
+
+
+def reassoc_resp(kek, gtk=GTK_, igtk=IGTK_, key_id=2, klen=None, prot=0, bad_len=False, ap=NEW_AP, igtk_kek=None, dup=False, pad=0):
+    sub = bytes([1, 6]) + R1KH_NEW
+    if gtk is not None:
+        w = kdf80211.aes_key_wrap(kek, gtk)
+        g = struct.pack("<H", key_id) + bytes([len(gtk) if klen is None else klen]) + bytes(range(8)) + w
+        g += bytes(pad)
+        sub += bytes([2, len(g) - (1 if bad_len else 0)]) + g[:len(g) - (1 if bad_len else 0)]
+        if dup:
+            g2 = struct.pack("<H", 3) + bytes([16]) + bytes(8) + kdf80211.aes_key_wrap(kek, bytes(16))
+            sub += bytes([2, len(g2)]) + g2
+    if igtk is not None:
+        wi = kdf80211.aes_key_wrap(igtk_kek or kek, igtk)
+        ig = struct.pack("<H", 5) + bytes([1, 2, 3, 4, 5, 6]) + bytes([len(igtk)]) + wi
+        sub += bytes([4, len(ig)]) + ig
+    fte = bytes([55, 2 + 16 + 64 + len(sub)]) + bytes(2 + 16 + 64) + sub
+    mde = bytes([54, 3]) + MDID_ + b"\x01"
+    return with_addrs(STA, ap, ap, lambda: synth.frame(0, 3, prot=prot, body=bytes(6) + mde + fte))
+
+
+init = build_ft(4, "sha256", PSK32, 16, 3)
+rf, r1, r1n = roam_frame(4, "sha256", PSK32, 16, rsnxe_used=False)
+kek_roam = ft80211.derive_ptk(r1, "sha256", bytes([22]) * 32, bytes([21]) * 32, NEW_AP, STA, 16, 16, 16)[1]
+
+
+def groups(extra):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "t.pcap")
+        synth.write_pcap(path, init + [rf] + extra)
+        frames_ = list(fr.iter_frames(path))
+        done_, _ = hs.track(frames_, [("wpa-psk", PSK32.hex())])
+        return gk.track_group(frames_, done_)
+
+
+got = groups([reassoc_resp(kek_roam)])
+check(len(got) == 1 and (got[0].ap, got[0].key_id, got[0].gtk, got[0].source, got[0].tx) == (mac(NEW_AP), 2, GTK_, "FT", True), "GTK：用漫游得到的 KEK 解开，密钥序号取低 2 位，来源 FT，AP = 响应的发送方")
+check(got[0].igtk == (5, bytes([1, 2, 3, 4, 5, 6]), IGTK_), "IGTK 子元素：序号(2) ‖ IPN(6) ‖ 长度(1) ‖ 包装的密钥")
+check(groups([reassoc_resp(kek_roam, igtk=None)])[0].igtk is None, "没有 IGTK 子元素：igtk 为 None")
+check(groups([reassoc_resp(kek_roam, key_id=0x0e)])[0].key_id == 2, "密钥序号字节 0x0e：只取低 2 位 = 2")
+check(groups([reassoc_resp(kek_roam, pad=1)]) == [], "包装的 GTK 长度不是 8 的倍数：不收（也不崩溃）")
+check(groups([reassoc_resp(kek_roam, igtk_kek=bytes(16))])[0].igtk is None and groups([reassoc_resp(kek_roam, igtk_kek=bytes(16))])[0].gtk == GTK_, "IGTK 的包装校验不过：IGTK 丢掉，GTK 照收")
+check(groups([reassoc_resp(kek_roam, dup=True)])[0].gtk == GTK_, "两个 GTK 子元素：取第一个")
+check(groups([reassoc_resp(bytes(16))]) == [], "KEK 不对（完整性校验不过）：不收")
+check(groups([reassoc_resp(kek_roam, klen=15)]) == [], "密钥长度字段与解出的长度不符：不收")
+check(groups([reassoc_resp(kek_roam, gtk=None)]) == [], "没有 GTK 子元素：不收")
+check(groups([reassoc_resp(kek_roam, prot=1)]) == [], "受保护的重关联响应：看不懂，忽略")
+check(groups([reassoc_resp(kek_roam, bad_len=True)]) == [], "GTK 子元素被截断：解码失败，不收")
+check(groups([reassoc_resp(kek_roam, ap=H("02aabbccdd99"))]) == [], "发送方不是做过握手的 AP：没有 KEK 可用，不收")
 
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)

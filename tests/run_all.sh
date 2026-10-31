@@ -23,9 +23,9 @@ run "握手跟踪（MIC 算法、PTK、候选 PMK、合成握手）" python3 tes
 run "握手对照 tshark（37 个握手：MIC 自证 + KCK / TK）" python3 tests/oracle/test_handshake_oracle.py
 run "CCMP / GCMP / TKIP / WEP 解密（数据帧与 PMF 管理帧，独立加密方）" python3 tests/test_decrypt.py
 run "TKIP 密钥混合对照 tshark（27 个合成帧）" python3 tests/oracle/test_tkip_oracle.py
-run "解密对照 tshark 明文（单播 1092、组播 174、PMF 管理帧 6、WEP 11 帧逐字节）" python3 tests/oracle/test_decrypt_diff.py
+run "解密对照 tshark 明文（单播 1092、组播 175、PMF 管理帧 6、WEP 11 帧逐字节）" python3 tests/oracle/test_decrypt_diff.py
 run "组密钥（KDE、Key Data 解包、GTK / IGTK、组播帧解密）" python3 tests/test_groupkeys.py
-run "组密钥对照 tshark 的 GTK（41 个，18 个相同）" python3 tests/oracle/test_groupkeys_oracle.py
+run "组密钥对照 tshark 的 GTK（44 个，19 个相同）" python3 tests/oracle/test_groupkeys_oracle.py
 run "BIP（四种套件的独立构造、IGTK 选择、组管理套件）" python3 tests/test_bip.py
 run "BIP 在真实抓包上（MME 个数对照 tshark，1 个 GMAC-256 帧验证通过）" python3 tests/oracle/test_bip_oracle.py
 run "FTE（快速切换元素）对照 tshark（16 帧）" python3 tests/oracle/test_ft_diff.py

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """groupkeys80211 对照 tshark：我们从 M3 / G1 的 Key Data 里解出的 GTK，和 tshark 打在帧上的 wlan.analysis.gtk 比。
-每个样例固定成 (我们解出几个, 其中 M3 / G1 各几个, 与 tshark 相同的 tshark GTK 数, tshark 有而我们没有的数, 我们有而 tshark 没有的数)。
+每个样例固定成 (我们解出几个, 其中 M3 / G1 各几个（其余来自 FT 漫游）, 与 tshark 相同的 tshark GTK 数, tshark 有而我们没有的数, 我们有而 tshark 没有的数)。
 GTK 能被解出本身就是证明：先用 KCK 验 M3 / G1 的 MIC，再让 KEK 过一遍 AES 密钥包装的完整性校验（RFC 3394 的 A6A6… 头）。
-tshark 有而我们没有：wpa2-ft-psk 漫游后新 AP 的 GTK（空中漫游，阶段 E 下一步）。我们有而 tshark 没有：tshark 4.4 加载不了的 64 字节 PMK 握手、它没跟踪的加密重新握手里的 G1、PMF 之类。
+（FT 漫游后新 AP 的 GTK 来自重关联响应的 FTE，来源 "FT"，不计入 M3 / G1 两列。）我们有而 tshark 没有：tshark 4.4 加载不了的 64 字节 PMK 握手、它没跟踪的加密重新握手里的 G1、PMF 之类。
 """
 import os
 import subprocess
@@ -64,11 +64,11 @@ EXPECTED = {
     "wpa-test-decode.pcap.gz": (1, 1, 0, 1, 0, 0),
     "wpa1-gtk-rekey.pcapng.gz": (3, 0, 3, 3, 0, 0),
     "wpa2-ft-eap.pcapng.gz": (1, 1, 0, 1, 0, 0),
-    "wpa2-ft-psk.pcapng.gz": (1, 1, 0, 1, 1, 0),
+    "wpa2-ft-psk.pcapng.gz": (2, 1, 0, 2, 0, 0),
     "wpa2-psk-ccmp-tkip.pcapng.gz": (1, 1, 0, 1, 0, 0),
     "wpa2-psk-mfp.pcapng.gz": (1, 1, 0, 1, 0, 0),
-    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (1, 1, 0, 0, 0, 1),
-    "wpa3-ft-sae-h2e.pcapng.gz": (1, 1, 0, 1, 0, 0),
+    "wpa3-ft-sae-ext-key-group20.pcapng.gz": (2, 1, 0, 0, 0, 2),
+    "wpa3-ft-sae-h2e.pcapng.gz": (2, 1, 0, 1, 0, 0),
     "wpa3-mlo.pcapng.gz": (0, 0, 0, 0, 0, 0),
     "wpa3-sae-ext-key-group21.pcapng.gz": (1, 1, 0, 0, 0, 1),
     "wpa3-sae.pcapng.gz": (1, 1, 0, 1, 0, 0),
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         else:
             print('    "%s": %s,' % (name, got))
     if EXPECTED:
-        check(sum(v[0] for v in got_all.values()) == 41 and sum(v[3] for v in got_all.values()) == 18, "共解出 %d 个组密钥，%d 个 GTK 与 tshark 相同" % (sum(v[0] for v in got_all.values()), sum(v[3] for v in got_all.values())))
+        check(sum(v[0] for v in got_all.values()) == 44 and sum(v[3] for v in got_all.values()) == 19, "共解出 %d 个组密钥，%d 个 GTK 与 tshark 相同" % (sum(v[0] for v in got_all.values()), sum(v[3] for v in got_all.values())))
         check(sorted(EXPECTED) == sorted(os.listdir(fetch_samples.SAMPLE_DIR)), "表里的样例就是目录里的全部样例")
         print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
         sys.exit(0 if not failures else 1)

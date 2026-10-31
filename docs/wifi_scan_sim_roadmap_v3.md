@@ -357,7 +357,12 @@ tshark 解不了而我们解开的 6 -> 13 帧（h2e 漫游后的 6 帧、group2
 **测试**：`tests/test_handshake.py` 合成漫游（AKM 4 / 9 / 25 / 19，MIC 由测试用 pycryptodome 的 CMAC 与 hmac 独立算），覆盖 RSNXE 在 / 不在 MIC 里、MIC 错、R0KH-ID 或移动域 ID 不同、
 R1KH-ID 长度不对、PMKID 不对、缺 MDE / RSNE / FTE、受保护的帧、没有初始握手；对 `_ft_roam` 的 22 个改动做变异检查，起初 7 个存活，补用例后只剩 2 个等价改动
 （按 STA 地址筛初始握手：别的 STA 的 PMK-R0 会让 MIC 对不上；初始握手的排序：同一个 XXKey 推出的 PMK-R0 相同）。
-**还没做**：漫游后新 AP 的 GTK（在重关联响应的 FTE 的 GTK 子元素里，用 KEK 包装）——wpa2-ft-psk 还有 1 帧组播没解开。
+**漫游后新 AP 的 GTK**（E2b）：重关联响应的 FTE 里，子元素 2 = GTK（密钥序号 2 字节 ‖ 长度 1 字节 ‖ RSC 8 字节 ‖ AES 包装的 GTK），子元素 4 = IGTK（序号 2 ‖ IPN 6 ‖ 长度 1 ‖ 包装的密钥）。
+`groupkeys80211._ft_group_key` 用这对地址的握手（含漫游得到的）的 KEK 解，完整性校验通过且长度字节吻合才收，来源记为 "FT"。
+**结果**：3 个 FT 样例的漫游后组密钥都解出来了（组密钥 41 -> 44，与 tshark 相同的 GTK 18 -> 19；wpa2-ft-psk 的漫游 GTK 与 tshark 的第二个 GTK 相同）；
+wpa2-ft-psk 漫游后最后一帧组播解开，与 tshark 明文相同的组播帧 174 -> 175，没有解不开的 FT 帧了（只剩 TDLS 对端直连 2 帧）；group20 漫游后又多 1 个 tshark 没有答案、靠 MIC 判断的帧（14 帧）。
+变异检查 15 个改动，起初 4 个存活（密钥序号掩码、包装长度 8 的倍数检查、IGTK 的校验、重复子元素取第一个），补用例后全部抓住；
+只剩一个等价改动：多个握手时按 M2 帧号从新到旧试 KEK（同一对地址、同一个 PMK-R0 推出的 KEK 相同）。
 
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
