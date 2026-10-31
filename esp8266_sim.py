@@ -44,6 +44,21 @@ FAKE_APS = [
     (3, "CMCC-EDU",        -58, "f0:03:f3:99:aa:bb", 1),
 ]
 
+# ---------------------------------------------------------------------------
+# 预置的虚拟 Probe Request（阶段 2 嗅探扩展）
+# 真实场景：手机/笔记本主动扫描网络时发出 Probe Request，
+#   定向探测带目标 SSID，广播探测 SSID 为空（找所有网络）。
+# 字段: (SSID, STA MAC, RSSI)
+# ---------------------------------------------------------------------------
+FAKE_PROBES = [
+    ("iPhone-13",        "3c:06:30:ab:cd:ef", -55),   # 定向：找自己的热点
+    ("",                 "3c:06:30:ab:cd:ef", -52),   # 同一台手机广播探测
+    ("Paul-Home-2.4G",   "9a:8b:7c:6d:5e:4f", -63),
+    ("CoffeeShop",       "22:33:44:55:66:77", -71),
+    ("",                 "aa:bb:cc:dd:ee:ff", -48),   # 广播探测
+    ("Xiaomi_Router",    "9a:8b:7c:6d:5e:4f", -60),
+]
+
 
 class ESP8266Sim:
     """模拟 ESP8266 AT 固件行为。"""
@@ -52,6 +67,11 @@ class ESP8266Sim:
         self.fd = fd
         self.buf = b""
         self.scan_count = 0
+        # 阶段 2 嗅探仿真状态
+        self.sniff_enabled = False
+        self._sniff_idx = 0
+        self._last_emit = 0.0
+        self._sniff_interval = 0.35   # 真实 promiscuous 回调异步高频，压频便于演示
 
     def _send(self, data):
         """统一写响应：兼容 str / bytes，避免 os.write 类型错误。"""
@@ -73,11 +93,48 @@ class ESP8266Sim:
                 self._send('+CWLAP:(%d,"%s",%d,"%s",%d)\r\n'
                            % (enc, ssid, rssi, mac, ch))
             self._send(b"OK\r\n")
+        elif cmd.startswith("AT+CWSNIFF"):
+            # 阶段 2：promiscuous 嗅探开关（仿真扩展命令）
+            arg = cmd.split("=", 1)[1].strip() if "=" in cmd else ""
+            if arg == "1":
+                self.sniff_enabled = True
+                self._sniff_idx = 0
+                self._last_emit = 0.0
+                self._send(b"OK\r\n")
+            elif arg == "0":
+                self.sniff_enabled = False
+                self._send(b"OK\r\n")
+            else:
+                self._send(b"ERROR\r\n")
         else:
             self._send(b"ERROR\r\n")
 
+    def _emit_probe_if_due(self):
+        """嗅探模式下按时间间隔推送一条 Probe Request 报告（主动上报）。
+
+        真实 ESP8266 promiscuous 回调不依赖主机命令，抓到帧即触发；
+        仿真中以时间驱动轮换 FAKE_PROBES，格式：
+            +SNIFF:PROBE,"<SSID>",<STA MAC>,<RSSI>
+        """
+        if not self.sniff_enabled:
+            return
+        now = time.time()
+        if now - self._last_emit < self._sniff_interval:
+            return
+        self._last_emit = now
+        ssid, mac, rssi = FAKE_PROBES[self._sniff_idx % len(FAKE_PROBES)]
+        self._sniff_idx += 1
+        # 空 SSID 表示广播探测（未指定目标网络），与真实抓包语义一致
+        name = ssid if ssid else "<broadcast>"
+        self._send('+SNIFF:PROBE,"%s",%s,%d\r\n' % (name, mac, rssi))
+
     def poll(self):
-        """非阻塞读取 master 端，按行处理命令。"""
+        """非阻塞读取 master 端，按行处理命令。
+
+        嗅探事件异步推送不依赖主机输入，因此每次 poll 先执行推送，
+        再处理输入；避免无输入时过早 return 导致 probe 永远不发出。
+        """
+        self._emit_probe_if_due()
         try:
             r, _, _ = select.select([self.fd], [], [], 0)
             if not r:
@@ -249,11 +306,68 @@ def demo_client(master_fd, slave_fd):
     print("\n[demo] 完成：STM32 侧完整扫描链路已在无硬件环境下跑通")
 
 
+def sniffer_demo():
+    """阶段 2 演示：promiscuous 嗅探 Probe Request 并打印 SSID/MAC/RSSI 报告。
+
+    模拟真实 ESP8266 promiscuous 回调：模块抓包后**主动**上报（无需主机
+    逐条查询）。演示流程：
+      1. 开启嗅探 AT+CWSNIFF=1
+      2. 模拟器按间隔自动推送 +SNIFF:PROBE,... 报告
+      3. 收到 6 条后关闭嗅探 AT+CWSNIFF=0
+    同步打印到 stdout，便于直接验收输出格式。
+    """
+    print("[sniffer-demo] 阶段2：仿真 ESP8266 promiscuous 嗅探 Probe Request")
+    master_fd, slave_fd, slave_name = setup_pty()
+    sim = ESP8266Sim(master_fd)
+    f = os.fdopen(os.dup(slave_fd), "rb+", buffering=0)
+
+    def send(cmd):
+        f.write(cmd)
+        time.sleep(0.2)   # 模拟模块处理时间
+
+    reports = []
+    try:
+        send(b"AT+CWSNIFF=1\r\n")
+        deadline = time.time() + 8.0   # 6 条 * 0.35s，留足余量
+        while len(reports) < len(FAKE_PROBES) and time.time() < deadline:
+            sim.poll()
+            # 模拟器响应写 master 端，从 slave 端（f）读取（与 demo_client 一致）
+            r, _, _ = select.select([f], [], [], 0)
+            if r:
+                chunk = f.read(4096)
+                if chunk:
+                    for raw in chunk.split(b"\r\n"):
+                        line = raw.strip()
+                        if line.startswith(b"+SNIFF:PROBE,"):
+                            text = line.decode("ascii", "replace")
+                            if text not in reports:
+                                reports.append(text)
+                                print("  " + text)
+            time.sleep(0.02)
+        send(b"AT+CWSNIFF=0\r\n")
+        print("\n[sniffer-demo] Probe 报告汇总：%d 条（含定向探测与广播探测）"
+              % len(reports))
+        for text in reports:
+            print("  " + text)
+        print("[sniffer-demo] 完成：无硬件环境下已可观察 Probe 嗅探链路")
+    finally:
+        f.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+        _ = slave_name   # 演示不需要手动连接 slave 端
+
+
 def main():
     parser = argparse.ArgumentParser(description="ESP8266 AT 固件模拟器")
     parser.add_argument("--manual", action="store_true",
                         help="手动模式：只起模拟器，不运行演示客户端")
+    parser.add_argument("--sniffer-demo", action="store_true",
+                        help="嗅探演示：仿真 promiscuous 抓 Probe Request 并输出报告")
     args = parser.parse_args()
+
+    if args.sniffer_demo:
+        sniffer_demo()
+        return
 
     master, slave, slave_name = setup_pty()
     print("=" * 60)
