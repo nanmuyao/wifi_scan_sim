@@ -109,7 +109,19 @@ WPA（WPA1：版本、组密码、成对套件、AKM；布局同 RSN，套件 OU
 这三种在样例里数量不多，所以另造了 16 个合成帧，把每一位单独置位逐个对照 tshark（RSNXE 的 bit4 / 5 / 6 各自单独验证了位号）。
 **没做**：FT 元素（55，FTE：MIC、ANonce、SNonce 和子元素）和「支持的运行类别」（59）。
 tshark 里它们的字段名没有规整的前缀，找不到可靠的对照字段；FTE 本身和 FT 握手的密钥层级相连，留到阶段 E 一起做。
-下一步：扩展元素 HE / EHT / Multi-Link（Multi-Link 一做完，前面登记的 4 帧嵌套缺口就能关掉）。
+### Multi-Link（C3）
+`decode_multi_link`（扩展元素 107，Wi-Fi 7）：控制类型（basic / probe request / reconfiguration / TDLS / priority access）、
+公共信息长度、MLD MAC 地址、链路 ID，以及每个站点配置（链路 ID、完整配置位、STA MAC、STA 信息长度、固定字段、**嵌套的元素**）。
+`flatten` 把嵌套元素展开在 Multi-Link 元素之后（tshark 列元素编号的顺序），元素编号、速率、厂商元素的列表因此与 tshark 一致。
+**关键发现**：每站点配置里，STA 信息之后、嵌套元素之前，还有外层帧自己的固定字段（关联请求 2 字节能力；关联响应 4 字节能力 + 状态码；
+信标 / 探测响应 2 字节能力），我第一次没算这些，把能力字段当元素解出了垃圾。固定字段长度现在由外层帧的子类型决定
+（`ML_PROFILE_FIXED`）：关联请求 / 响应由样例对照，重关联、探测响应、信标由合成帧对照 tshark。
+为避免依赖草案阶段会变的存在位图细节，定位只用各部分自带的长度字节（公共信息长度、STA 信息长度）。
+结果：前面登记的 Multi-Link 嵌套缺口全部关闭——元素编号 / 扩展元素 / 速率 / 扩展速率 / 厂商元素在 24 个样例上 0 不一致；
+Multi-Link 的类型、公共信息长度、MLD MAC、链路 ID、站点配置控制字段与 tshark 一致。
+剩下的 Multi-Link 缺口只有 4 帧 SAE 认证里带的（要先解 SAE 认证帧体，阶段 E）。
+**没做**：Multi-Link 公共信息里的其它可选字段（EML 能力、MLD 能力等）和 probe request / reconfiguration 类型的内部结构；HE / EHT 元素的内容。
+下一步：HE / EHT 能力与操作元素（35、36、108、106）。
 还没对照的帧层内容：A-MSDU 内部结构、Action 帧各类别。
 
 ## 2. 验证方法（贯穿所有阶段）

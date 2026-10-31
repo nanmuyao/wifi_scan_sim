@@ -109,6 +109,10 @@ FIELDS += [("mdid", "wlan.mobility_domain.mdid"), ("mde_ft_capab", "wlan.mobilit
            ("idle_protected", "wlan.bss_max_idle.options.protected"),
            ("rsnx", "wlan.rsnx"), ("rsnx_len", "wlan.rsnx.length"), ("rsnx_twt", "wlan.rsnx.protected_twt_operations_support"),
            ("rsnx_h2e", "wlan.rsnx.sae_hash_to_element"), ("rsnx_pk", "wlan.rsnx.sae_pk")]
+# Multi-Link（802.11be）：控制类型、公共信息长度、MLD MAC、链路 ID（第一个出现的）
+FIELDS += [("ml_type", "wlan.eht.multi_link.control.type"), ("ml_common_len", "wlan.eht.multi_link.common_info.length"),
+           ("ml_mld_mac", "wlan.eht.multi_link.common_info.mld_mac_address"),
+           ("ml_link_id", "wlan.eht.multi_link.common_info.link_id_subfield.link_id")]
 WMM_AC = ("be", "bk", "vi", "vo")
 for _ac in WMM_AC:
     FIELDS += [("wmm_aifsn_" + _ac, "wlan.wfa.ie.wme.acp.aifsn_" + _ac), ("wmm_acm_" + _ac, "wlan.wfa.ie.wme.acp.acm_" + _ac),
@@ -120,7 +124,8 @@ CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multic
                   "rsn_gcs_oui", "rsn_caps", "rsn_mfpr", "rsn_mfpc", "rsn_pmkid_count", "rsn_gmcs",
                   "ht_caps", "ht_ampdu", "ht_mcs0", "ht_txdef", "ht_rate", "ht_primary", "ht_secoff", "ht_width", "ht_rifs",
                   "ht_prot", "extcap_bits", "mdid", "mde_ft_capab", "mde_ft_over_ds", "mde_resource", "idle_period", "idle_options", "idle_protected", "rsnx",
-                  "rsnx_len", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "wmm_subtype", "wmm_version", "wmm_qos",
+                  "rsnx_len", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "ml_type", "ml_common_len", "ml_mld_mac", "ml_link_id", "ml_sta_ctrl",
+                  "ml_sta_link_ids", "wmm_subtype", "wmm_version", "wmm_qos",
                   "wmm_uapsd", "wmm_psc", "wpa_version", "wpa_mcs", *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "acm", "ecwmin", "ecwmax", "txop")], "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
                   "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
 # 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
@@ -130,7 +135,9 @@ TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number")
                 ("country_mtpl", "wlan.country_info.fnm.mtpl"),
                 ("rsn_pcs", "wlan.rsn.pcs.type"), ("rsn_akm", "wlan.rsn.akms.type"),
                 ("vendor_oui", "wlan.tag.oui"), ("wfa_type", "wlan.wfa.ie.type"),
-                ("wpa_ucs", "wlan.wfa.ie.wpa.ucs.type"), ("wpa_akm", "wlan.wfa.ie.wpa.akms")]    # akms.type 在 Wireshark 里被登记成了 wlan.wfa.ie.wpa.type，取不到；用完整的 32 位套件值（OUI << 8 | 类型）
+                ("wpa_ucs", "wlan.wfa.ie.wpa.ucs.type"), ("wpa_akm", "wlan.wfa.ie.wpa.akms"),
+                ("ml_sta_ctrl", "wlan.eht.multi_link.sta_profile.sta_control"),
+                ("ml_sta_link_ids", "wlan.eht.multi_link.sta_profile.sta_control.link_id")]    # akms.type 在 Wireshark 里被登记成了 wlan.wfa.ie.wpa.type，取不到；用完整的 32 位套件值（OUI << 8 | 类型）
 TSHARK_MAJOR_MINOR = "4.4"
 
 
@@ -162,7 +169,7 @@ def _norm(name, v):
         return int(v, 16)
     if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
-                "dtim_period", "country_env", "idle_period", "rsnx_len", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
+                "dtim_period", "country_env", "ml_type", "ml_common_len", "ml_link_id", "idle_period", "rsnx_len", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
                 *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "ecwmin", "ecwmax", "txop")], "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
                 "ht_primary"):
         return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
@@ -236,12 +243,34 @@ def _ie(rec, name, key):
     return None if e is None else e[key]
 
 
-def _vendors(rec, value, keep=lambda v: True):
-    """所有厂商元素的某个值（按出现顺序）；这一帧没解码元素时 None。"""
-    d = rec.get("ie")
-    if d is None:
+def _flat(rec, key):
+    """Multi-Link 嵌套展开之后，全部同类元素的内容串起来（速率等）；这一帧没解码元素时 None。"""
+    f = rec.get("ie_flat")
+    return None if f is None else f[key]
+
+
+def _ml(rec, key):
+    """这一帧第一个 Multi-Link 元素的某个字段；没有 Multi-Link 时 None。"""
+    f = rec.get("ie_flat")
+    if f is None or not f["multi_link"] or f["multi_link"][0] is None:
         return None
-    return [value(v) for v in d["vendors"] if v and keep(v)]
+    return f["multi_link"][0][key]
+
+
+def _ml_stas(rec, key):
+    """第一个 Multi-Link 元素里每个站点配置的某个字段（按出现顺序）。"""
+    f = rec.get("ie_flat")
+    if f is None or not f["multi_link"] or f["multi_link"][0] is None:
+        return None
+    return [s[key] for s in f["multi_link"][0]["stas"]]
+
+
+def _vendors(rec, value, keep=lambda v: True):
+    """所有厂商元素（含 Multi-Link 嵌套的）的某个值，按出现顺序；这一帧没解码元素时 None。"""
+    f = rec.get("ie_flat")
+    if f is None:
+        return None
+    return [value(v) for v in f["vendors"] if v and keep(v)]
 
 
 def _suite_list_of(rec, name, key):
@@ -315,8 +344,8 @@ def ours_frames(path):
             "llc_dsap": r.get("llc_dsap"),
             "tags": r.get("ie_ids"),
             "ext_tags": r.get("ie_ext_ids"),
-            "rates": _ie(r, "rates", "rates"),
-            "ext_rates": _ie(r, "ext_rates", "rates"),
+            "rates": _flat(r, "rates"),
+            "ext_rates": _flat(r, "ext_rates"),
             "country_fcn": _triplets(r, "first_channel"),
             "country_nc": _triplets(r, "num_channels"),
             "country_mtpl": _triplets(r, "max_power"),
@@ -365,6 +394,12 @@ def ours_frames(path):
             "rsnx_pk": _ie(r, "rsnxe", "sae_pk"),
             "vendor_oui": _vendors(r, lambda v: v["oui"]),
             "wfa_type": _vendors(r, lambda v: v["type"], lambda v: v["oui"] == 0x0050F2),
+            "ml_type": _ml(r, "type"),
+            "ml_common_len": _ml(r, "common_len"),
+            "ml_mld_mac": _ml(r, "mld_mac"),
+            "ml_link_id": _ml(r, "link_id"),
+            "ml_sta_ctrl": _ml_stas(r, "control"),
+            "ml_sta_link_ids": _ml_stas(r, "link_id"),
             "wpa_ucs": _suite_list_of(r, "wpa", "pairwise"),
             "wpa_akm": _suite_values(r, "wpa", "akm"),
             "wpa_version": _ie(r, "wpa", "version"),

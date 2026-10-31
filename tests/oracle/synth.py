@@ -134,6 +134,31 @@ def cases():
         out.append(("Beacon BSS max idle %d options %d" % (period, opt), mgmt(8, 12, ie(0, b"i") + ie(90, struct.pack("<HB", period, opt)))))
     for octets in ((0x00,), (0x10,), (0x20,), (0x40,), (0x70,), (0x21, 0x03), (0xff, 0xff)):
         out.append(("Beacon RSNXE %s" % ",".join("%02x" % o for o in octets), mgmt(8, 12, ie(0, b"x") + ie(244, bytes(octets)))))
+    # Multi-Link（802.11be）：公共信息 + 每站点配置（STA 信息 + 外层帧的固定字段 + 嵌套元素）。
+    # 固定字段的长度取决于外层帧类型，逐个子类型让 tshark 验证
+    def ml_basic(stas, fixed, mld=b"\x02\x00\x00\x00\x0a\x00", link_id=None, presence=0):
+        control = 0 | presence | (0x10 if link_id is not None else 0)
+        common = bytes([1 + len(mld) + (1 if link_id is not None else 0)]) + mld + (bytes([link_id]) if link_id is not None else b"")
+        body = struct.pack("<H", control) + common
+        for sta_link, mac, elements in stas:
+            sta_info = (bytes([7]) + mac) if mac else bytes([1])
+            ctl = sta_link | 0x10 | (0x20 if mac else 0)
+            data = struct.pack("<H", ctl) + sta_info + bytes(fixed) + elements
+            body += bytes([0, len(data)]) + data
+        return ie(0, body, ext=107)
+
+    # 主体自己的 DS / HT 能力：tshark 取「第一次出现」时会把嵌套里的也算上，真实帧的主体总是有自己的
+    MAIN = ie(3, b"\x06") + ie(45, htcap())
+    nested = ie(1, b"\x82\x84\x8b\x96") + ie(50, b"\x30\x48") + ie(45, htcap()) + ie(221, b"\x00\x11\x22\x01")
+    mac1, mac2 = b"\xe6\xcc\x7b\x74\xe1\x42", b"\x02\x00\x00\xdc\x7a\x19"
+    for name, sub, fixed_len, fixed_bytes in (("Association Request", 0, 4, b"\x31\x04"), ("Association Response", 1, 6, b"\x11\x04\x00\x00"),
+                                              ("Reassociation Request", 2, 10, b"\x31\x04"), ("Reassociation Response", 3, 6, b"\x11\x04\x00\x00"),
+                                              ("Probe Response", 5, 12, b"\x11\x04"), ("Beacon", 8, 12, b"\x11\x04")):
+        out.append(("%s Multi-Link, 1 link, nested elements" % name, mgmt(sub, fixed_len, ie(0, b"ml") + MAIN + ml_basic([(1, mac1, nested)], fixed_bytes, link_id=0) + ie(221, b"\x00\x33\x44\x05"))))
+    out.append(("Beacon Multi-Link, 2 links", mgmt(8, 12, ie(0, b"ml") + MAIN + ml_basic([(1, mac1, ie(0, b"a") + ie(1, b"\x82")), (2, mac2, ie(3, b"\x0b"))], b"\x11\x04"))))
+    out.append(("Beacon Multi-Link, no per-STA profile", mgmt(8, 12, ie(0, b"ml") + MAIN + ml_basic([], b""))))
+    out.append(("Beacon Multi-Link, STA without MAC address", mgmt(8, 12, ie(0, b"ml") + MAIN + ml_basic([(3, None, ie(1, b"\x8c"))], b"\x11\x04"))))
+    out.append(("Beacon Multi-Link, link ID in common info, elements before and after", mgmt(8, 12, ie(0, b"ml") + MAIN + ie(3, b"\x06") + ml_basic([(1, mac1, ie(1, b"\x82"))], b"\x11\x04", link_id=5) + ie(7, b"US \x01\x0b\x14"))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))

@@ -45,6 +45,87 @@ def walk(buf):
     return els, False
 
 
+EXT_MULTI_LINK = 107                 # 扩展元素 ID：Multi-Link（802.11be，Wi-Fi 7）
+ML_TYPES = {0: "basic", 1: "probe_request", 2: "reconfiguration", 3: "tdls", 4: "priority_access"}
+ML_SUBELT_PER_STA, ML_SUBELT_FRAGMENT = 0, 254
+# 每站点配置里，STA 信息之后、元素之前，是外层帧自己的固定字段（外层帧子类型 -> 字节数）：
+# 关联请求 / 重关联请求：能力 2；关联响应 / 重关联响应：能力 2 + 状态码 2；信标 / 探测响应：能力 2
+ML_PROFILE_FIXED = {0: 2, 1: 4, 2: 2, 3: 4, 5: 2, 8: 2}
+
+
+def decode_multi_link(d, fixed=0):
+    """Multi-Link 元素（扩展 ID 107）。d 是扩展 ID 之后的数据。
+
+    Multi-Link 控制 2 字节（小端）：bit0-2 类型（0 basic、1 probe request、2 reconfiguration、3 TDLS、4 priority access），
+    其余位是「公共信息里有哪些可选字段」的存在位图；
+    公共信息：第一个字节是它自己的长度（含这个字节），所以不看存在位图也能找到后面的链路信息；
+    basic 类型的公共信息里紧跟着 MLD MAC 地址（6 字节），存在位图 bit4 置位时再跟链路 ID（1 字节）；
+    链路信息：若干子元素（ID 1 字节、长度 1 字节、数据），子元素 0 = 每站点配置（Per-STA Profile）：
+        STA 控制 2 字节（bit0-3 链路 ID，bit4 完整配置，bit5 有 MAC 地址，bit6 有信标间隔，bit7 有 TSF 偏移，
+        bit8 有 DTIM 信息，bit9 有 NSTR 链路对，bit10 NSTR 位图大小，bit11 有 BSS 参数变化计数）
+        + STA 信息（第一个字节是它自己的长度，含这个字节；bit5 置位时紧跟 6 字节 MAC 地址）
+        + STA 配置（其余字节，是一串普通信息元素）。
+    元素在草案和正式标准之间改过位图的细节，这里只依赖各部分自带的长度字节，不依赖可选字段的具体顺序（MAC 地址除外）。
+
+    fixed 是每站点配置里 STA 信息之后、元素之前的固定字段字节数（见 ML_PROFILE_FIXED，由外层帧的子类型决定），
+    这些字节放在每个站点的 "fixed_fields" 里。
+
+    返回 dict；少于 3 字节返回 None。长度字节超出数据范围时 "malformed" 为 True，已读到的保留。"""
+    if len(d) < 3:
+        return None
+    control = d[0] | d[1] << 8
+    typ = control & 7
+    out = {"control": control, "type": typ, "type_name": ML_TYPES.get(typ), "common_len": d[2], "mld_mac": None,
+           "link_id": None, "stas": [], "malformed": False}
+    if d[2] < 1 or 2 + d[2] > len(d):
+        out["malformed"] = True
+        return out
+    common = d[2:2 + d[2]]
+    if typ == 0 and len(common) >= 7:
+        out["mld_mac"] = mac_str(common[1:7])
+        if control >> 4 & 1 and len(common) >= 8:
+            out["link_id"] = common[7] & 0x0F
+    p = 2 + d[2]
+    while p + 2 <= len(d):
+        sid, slen = d[p], d[p + 1]
+        if p + 2 + slen > len(d):
+            out["malformed"] = True
+            break
+        data = d[p + 2:p + 2 + slen]
+        p += 2 + slen
+        if sid != ML_SUBELT_PER_STA:
+            continue
+        if len(data) < 3 or len(data) < 2 + data[2]:
+            out["malformed"] = True
+            continue
+        ctl = data[0] | data[1] << 8
+        sta_info = data[2:2 + data[2]]
+        start = 2 + data[2]
+        elements, trunc = walk(data[start + fixed:])
+        out["stas"].append({"control": ctl, "link_id": ctl & 0x0F, "complete": bool(ctl >> 4 & 1),
+                            "mac": mac_str(sta_info[1:7]) if ctl >> 5 & 1 and len(sta_info) >= 7 else None,
+                            "info_len": data[2], "fixed_fields": bytes(data[start:start + fixed]),
+                            "elements": elements, "truncated": trunc})
+    return out
+
+
+def mac_str(b):
+    return ":".join("%02x" % x for x in b)
+
+
+def flatten(els, fixed=0):
+    """把 Multi-Link 元素里每站点配置的嵌套元素展开，插在 Multi-Link 元素之后（tshark 列出元素编号的顺序）。
+    其它元素原样。嵌套里没有 Multi-Link，所以只展开一层。fixed 见 decode_multi_link。"""
+    out = []
+    for e in els:
+        out.append(e)
+        if e.id == ID_EXTENSION and e.ext == EXT_MULTI_LINK:
+            ml = decode_multi_link(e.data, fixed)
+            for sta in (ml["stas"] if ml else ()):
+                out.extend(sta["elements"])
+    return out
+
+
 def ids(els):
     """(普通元素 ID 列表, 扩展元素的扩展 ID 列表)，保持出现顺序。"""
     return ([e.id for e in els if e.id != ID_EXTENSION],

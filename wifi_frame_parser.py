@@ -542,8 +542,15 @@ def parse_pcap_file(path):
                     sae_auth = h["subtype"] == 11 and len(body) >= 2 and struct.unpack("<H", body[:2])[0] == 3
                     if off is not None and not h["protected"] and len(body) >= off and not sae_auth:    # SAE 认证帧体不是元素序列，阶段 E
                         els, rec["ie_truncated"] = ie.walk(body[off:])
-                        rec["ie_ids"], rec["ie_ext_ids"] = ie.ids(els)
+                        fx = ie.ML_PROFILE_FIXED.get(h["subtype"], 0)
+                        flat = ie.flatten(els, fx)         # Multi-Link 里嵌套的元素也展开（元素编号、速率、厂商元素的列表用）
+                        rec["ie_ids"], rec["ie_ext_ids"] = ie.ids(flat)
                         rec["ie"] = ie.decode_all(els)
+                        rec["ie_flat"] = {
+                            "rates": [b for e in flat if e.id == 1 for b in e.data],
+                            "ext_rates": [b for e in flat if e.id == 50 for b in e.data],
+                            "vendors": ie.vendor_elements(flat),
+                            "multi_link": [ie.decode_multi_link(e.data, fx) for e in els if e.id == 255 and e.ext == ie.EXT_MULTI_LINK]}
                     m = parse_mgmt_frame(h, body)
                     if m:
                         if "error" in m:

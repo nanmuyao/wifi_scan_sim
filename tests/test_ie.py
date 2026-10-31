@@ -254,6 +254,79 @@ check(r["length_field"] == 1 and r["value"] == 0x0321 and r["sae_h2e"] and not r
 check(ie.decode_rsnxe(b"\x0f")["length_field"] == 15, "长度字段是 4 位（0x0f -> 15）")
 check(ie.decode_rsnxe(b"") is None, "RSNXE：空元素不合规")
 
+print("== Multi-Link（扩展 ID 107）==")
+MAC1, MAC2 = b"\x02\x00\x00\x00\x0a\x00", b"\xe6\xcc\x7b\x74\xe1\x42"
+
+
+def per_sta(link, mac, fixed, elements):
+    info = (bytes([7]) + mac) if mac else bytes([1])
+    data = struct.pack("<H", link | 0x10 | (0x20 if mac else 0)) + info + fixed + elements
+    return bytes([0, len(data)]) + data
+
+
+def ml(control, common, *subelts):
+    return struct.pack("<H", control) + bytes([len(common) + 1]) + common + b"".join(subelts)
+
+
+nest = b"\x01\x02\x82\x84" + b"\x32\x01\x30"
+m = ie.decode_multi_link(ml(0x0000, MAC1, per_sta(1, MAC2, b"\x11\x04", nest)), fixed=2)
+check((m["type"], m["type_name"], m["common_len"], m["mld_mac"], m["link_id"], m["malformed"]) == (0, "basic", 7, "02:00:00:00:0a:00", None, False),
+      "basic：类型 0、公共信息长度 7、MLD MAC 地址")
+s0 = m["stas"][0]
+check((s0["link_id"], s0["complete"], s0["mac"], s0["info_len"], s0["fixed_fields"]) == (1, True, "e6:cc:7b:74:e1:42", 7, b"\x11\x04"),
+      "每站点配置：链路 ID 1、完整配置、STA MAC、STA 信息长度 7、外层帧的固定字段 2 字节")
+check([(e.id, e.data) for e in s0["elements"]] == [(1, b"\x82\x84"), (50, b"\x30")], "固定字段之后才是嵌套元素")
+m = ie.decode_multi_link(ml(0x0010, MAC1 + b"\x25"), fixed=0)
+check(m["link_id"] == 5 and m["common_len"] == 8, "存在位图 bit4：公共信息里 MAC 之后有链路 ID（只取低 4 位：0x25 -> 5）")
+m = ie.decode_multi_link(ml(0x0000, MAC1 + b"\x25"), fixed=0)
+check(m["link_id"] is None and m["common_len"] == 8, "存在位图 bit4 没置位：不读链路 ID")
+for typ, name in ((0, "basic"), (1, "probe_request"), (2, "reconfiguration"), (3, "tdls"), (4, "priority_access")):
+    check(ie.decode_multi_link(ml(typ, b"\x00"))["type_name"] == name and ie.decode_multi_link(ml(typ, b"\x00"))["type"] == typ, "类型 %d = %s" % (typ, name))
+m = ie.decode_multi_link(ml(0x0800 | 0x0100, MAC1))
+check(m["type"] == 0 and m["control"] == 0x0900, "类型只取 bit0-2；存在位图的位不影响类型")
+m = ie.decode_multi_link(ml(0x0001, MAC1))
+check(m["type"] == 1 and m["mld_mac"] is None and m["common_len"] == 7 and m["stas"] == [], "非 basic 类型（probe request）：公共信息够长也不当 MLD MAC 读")
+m = ie.decode_multi_link(struct.pack("<H", 0) + bytes([len(MAC1) + 2]) + MAC1)
+check(m["malformed"] and m["mld_mac"] is None, "公共信息声明的长度比实际多 1 字节：畸形（差一也要抓住）")
+m = ie.decode_multi_link(struct.pack("<H", 0) + bytes([len(MAC1) + 1]) + MAC1)
+check(not m["malformed"] and m["mld_mac"] == "02:00:00:00:0a:00", "公共信息声明的长度正好等于实际：不是畸形")
+m = ie.decode_multi_link(ml(0, MAC1, per_sta(12, MAC2, b"", b"")))
+check(m["stas"][0]["link_id"] == 12, "链路 ID 是 STA 控制的低 4 位（12），不是 3 位")
+d_ = struct.pack("<H", 0x0011) + bytes([7]) + MAC2          # 完整配置位置位、「有 MAC」位没置位，但 STA 信息有 7 字节
+m = ie.decode_multi_link(ml(0, MAC1, bytes([0, len(d_)]) + d_))
+check(m["stas"][0]["complete"] and m["stas"][0]["mac"] is None, "「有 MAC 地址」是 STA 控制的 bit5，不是 bit4（完整配置）")
+d_ = struct.pack("<H", 0x0021) + bytes([7]) + MAC2          # 「有 MAC」置位、完整配置没置位
+m = ie.decode_multi_link(ml(0, MAC1, bytes([0, len(d_)]) + d_))
+check(not m["stas"][0]["complete"] and m["stas"][0]["mac"] == "e6:cc:7b:74:e1:42", "反过来：只有「有 MAC」位")
+m = ie.decode_multi_link(ml(0, MAC1, per_sta(1, None, b"", b""), per_sta(2, MAC2, b"", b"\x03\x01\x06")))
+check([(s["link_id"], s["mac"], s["info_len"]) for s in m["stas"]] == [(1, None, 1), (2, "e6:cc:7b:74:e1:42", 7)], "两个站点配置；没有 MAC 时 STA 信息长度是 1")
+check(m["stas"][1]["elements"][0].id == 3, "第二个站点的嵌套元素")
+m = ie.decode_multi_link(ml(0, MAC1, bytes([1, 3]) + b"abc", per_sta(1, MAC2, b"", b"")))
+check(len(m["stas"]) == 1 and not m["malformed"], "ID 不是 0 的子元素被跳过")
+m = ie.decode_multi_link(ml(0, MAC1) + bytes([0, 50]) + b"\x01\x00")
+check(m["malformed"] and m["stas"] == [] and m["mld_mac"] == "02:00:00:00:0a:00", "子元素长度超出数据：畸形，公共信息保留")
+m = ie.decode_multi_link(struct.pack("<H", 0) + bytes([40]) + MAC1)
+check(m["malformed"] and m["mld_mac"] is None, "公共信息长度超出数据：畸形")
+m = ie.decode_multi_link(struct.pack("<H", 0) + bytes([0]))
+check(m["malformed"], "公共信息长度 0（连长度字节自己都不算）：畸形")
+check(ie.decode_multi_link(b"\x00\x00") is None, "不足 3 字节：None")
+data = ml(0, MAC1, bytes([0, 3]) + struct.pack("<H", 0x31) + bytes([9]))
+check(ie.decode_multi_link(data)["malformed"], "STA 信息长度 9 超出子元素：畸形，不崩溃")
+
+print("== flatten ==")
+inner = ml(0, MAC1, per_sta(1, MAC2, b"\x11\x04", b"\x01\x01\x82\xff\x02\x23\x00"))     # 嵌套：速率元素 + 一个扩展元素 0x23
+raw = b"\x00\x01a" + bytes([255, len(inner) + 1, 107]) + inner + b"\x30\x00"
+els, _ = ie.walk(raw)
+check([(e.id, e.ext) for e in els] == [(0, None), (255, 107), (48, None)], "遍历：主体 3 个元素")
+flat = ie.flatten(els, fixed=2)
+check([(e.id, e.ext) for e in flat] == [(0, None), (255, 107), (1, None), (255, 0x23), (48, None)],
+      "展开：嵌套的元素紧跟在 Multi-Link 元素之后，后面的主体元素顺序不变")
+check(ie.ids(flat) == ([0, 1, 48], [107, 35]), "ids()：普通元素 [0, 1, 48]，扩展元素 [107, 35]")
+check([(e.id, e.ext) for e in ie.flatten(els, fixed=0)] != [(e.id, e.ext) for e in flat], "固定字段长度不同，嵌套元素的起点就不同")
+check(ie.flatten(ie.walk(b"\x00\x01a\x30\x00")[0], 2) == ie.walk(b"\x00\x01a\x30\x00")[0], "没有 Multi-Link：原样")
+check(ie.flatten(ie.walk(bytes([255, 3, 107, 0, 0]))[0], 2)[0].ext == 107 and len(ie.flatten(ie.walk(bytes([255, 3, 107, 0, 0]))[0], 2)) == 1, "Multi-Link 太短（None）：只留它自己")
+check(ie.ML_PROFILE_FIXED == {0: 2, 1: 4, 2: 2, 3: 4, 5: 2, 8: 2}, "固定字段长度表（已由 tshark 对照合成帧确认）")
+
 print("== decode_all ==")
 els, _ = ie.walk(b"\x00\x01a\x00\x01b\x03\x01\x06\x05\x01\x00\xff\x02\x23\x00")
 d = ie.decode_all(els)

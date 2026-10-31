@@ -18,18 +18,15 @@ MIN_COMPARED_TYPE_SUBTYPE = 6400      # 实测 6461
 # 其余字段一律要求 0 / 0。
 KNOWN_GAPS = {
     # 数据帧里的 EAPOL-Key：tshark 会读 Key Data 里的 RSN 元素（阶段 D）
-    # 4 帧 Multi-Link 元素里嵌套的子元素：tshark 展开了，我们不展开（阶段 C，解码 Multi-Link）
-    "tags": (2, 43),
-    # 8 帧 SAE 认证：帧体不是元素序列，要按曲线组的长度跳过 scalar / element（阶段 E）；另有 2 帧同上的 Multi-Link
-    "ext_tags": (2, 8),
-    # 同样是那几帧 Multi-Link：嵌套的子元素里还有速率元素，tshark 把它们的速率并进同一个列表
-    "rates": (2, 0),
-    "ext_rates": (2, 0),
-    # 6 帧 SAE 认证里的扩展元素 114（AKM Suite Selector），tshark 也按 RSN 的 AKM 列出来（阶段 E）
+    "tags": (0, 43),
+    # 8 帧 SAE 认证：帧体不是元素序列，要按曲线组的长度跳过 scalar / element（阶段 E）
+    "ext_tags": (0, 8),
+    # 其中 6 帧的扩展元素 114（AKM Suite Selector），tshark 也按 RSN 的 AKM 列出来（阶段 E）
     "rsn_akm": (0, 6),
-    # 一帧 Multi-Link 里嵌套的子元素带了厂商元素（WMM），tshark 一并列出
-    "vendor_oui": (1, 0),
-    "wfa_type": (1, 0),
+    # 其中 4 帧的 SAE 认证里带着 Multi-Link 元素，同样要先解 SAE 认证帧体（阶段 E）
+    "ml_type": (0, 4),
+    "ml_common_len": (0, 4),
+    "ml_mld_mac": (0, 4),
 }
 failures = []
 
