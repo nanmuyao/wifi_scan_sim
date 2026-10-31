@@ -79,11 +79,30 @@ FIELDS = [
     ("rsn_mfpc", "wlan.rsn.capabilities.mfpc"),
     ("rsn_pmkid_count", "wlan.rsn.pmkid.count"),
     ("rsn_gmcs", "wlan.rsn.gmcs.type"),
+    ("ht_caps", "wlan.ht.capabilities"),
+    ("ht_ampdu", "wlan.ht.ampduparam"),
+    ("ht_mcs0", "wlan.ht.mcsset.rxbitmask.0to7"),
+    ("ht_txdef", "wlan.ht.mcsset.txsetdefined"),
+    ("ht_rate", "wlan.ht.mcsset.highestdatarate"),
+    ("ht_primary", "wlan.ht.info.primarychannel"),
+    ("ht_secoff", "wlan.ht.info.secchanoffset"),
+    ("ht_width", "wlan.ht.info.chanwidth"),
+    ("ht_rifs", "wlan.ht.info.rifs"),
+    ("ht_prot", "wlan.ht.info.ht_protection"),
+    ("ht_txrxneq", "wlan.ht.mcsset.txrxmcsnotequal"),
+    ("ht_txunequal", "wlan.ht.mcsset.txunequalmod"),
 ]
+# HT 能力信息里的单个位：我们的键 -> tshark 的字段名后缀；逐位对照，位号表写错就会被抓到
+HT_FLAG_FIELDS = {"ldpc": "ldpccoding", "width40": "width", "greenfield": "green", "short_gi20": "short20",
+                  "short_gi40": "short40", "tx_stbc": "txstbc", "delayed_ba": "delayedblockack", "max_amsdu_7935": "amsdu",
+                  "dsss_cck_40": "dsscck", "psmp": "psmp", "forty_intolerant": "40mhzintolerant", "lsig_txop": "lsig"}
+FIELDS += [("htcap_" + k, "wlan.ht.capabilities." + v) for k, v in HT_FLAG_FIELDS.items()]
 # 元素内容字段只对管理帧比较：数据帧里 EAPOL-Key 的 Key Data 也带元素，那个缺口已经在「tags」一行单独登记（阶段 D）
 CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multicast", "tim_offset", "tim_bitmap", "country",
                   "country_env", "erp", "erp_present", "erp_protection", "erp_barker", "rsn_version", "rsn_gcs",
                   "rsn_gcs_oui", "rsn_caps", "rsn_mfpr", "rsn_mfpc", "rsn_pmkid_count", "rsn_gmcs",
+                  "ht_caps", "ht_ampdu", "ht_mcs0", "ht_txdef", "ht_rate", "ht_primary", "ht_secoff", "ht_width", "ht_rifs",
+                  "ht_prot", "extcap_bits", "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
                   "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
 # 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
 TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number"),
@@ -92,6 +111,21 @@ TSHARK_EXTRA = [("tags", "wlan.tag.number"), ("ext_tags", "wlan.ext_tag.number")
                 ("country_mtpl", "wlan.country_info.fnm.mtpl"),
                 ("rsn_pcs", "wlan.rsn.pcs.type"), ("rsn_akm", "wlan.rsn.akms.type")]
 TSHARK_MAJOR_MINOR = "4.4"
+
+
+_EXTCAP_BITS = []
+
+
+def extcap_bool_bits():
+    """tshark 为扩展能力定义了单独布尔字段（wlan.extcap.bN）的位号；多位字段、保留位不在其中。"""
+    if not _EXTCAP_BITS:
+        out = subprocess.run(["tshark", "-G", "fields"], capture_output=True, text=True).stdout
+        for line in out.split("\n"):
+            p = line.split("\t")
+            if len(p) >= 4 and p[2].startswith("wlan.extcap.b") and p[3] == "FT_BOOLEAN":
+                _EXTCAP_BITS.append(int(p[2][len("wlan.extcap.b"):]))
+        _EXTCAP_BITS.sort()
+    return _EXTCAP_BITS
 
 
 def tshark_version():
@@ -107,9 +141,10 @@ def _norm(name, v):
         return int(v, 16)
     if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
-                "dtim_period", "country_env", "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs"):
-        return int(v)
-    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui"):
+                "dtim_period", "country_env", "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
+                "ht_primary"):
+        return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot"):
         return int(v, 0)
     if name in ("ssid", "tim_bitmap"):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
@@ -120,7 +155,10 @@ def _norm(name, v):
     if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
         return {"1": True, "0": False}.get(v)
     if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu",
-                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc"):
+                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal",
+                "htcap_ldpc", "htcap_width40", "htcap_greenfield", "htcap_short_gi20", "htcap_short_gi40", "htcap_tx_stbc",
+                "htcap_delayed_ba", "htcap_max_amsdu_7935", "htcap_dsss_cck_40", "htcap_psmp", "htcap_forty_intolerant",
+                "htcap_lsig_txop"):
         return v == "True"
     return v
 
@@ -135,8 +173,14 @@ def tshark_frames(path):
     cmd2 = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=a", "-E", "aggregator=,"]
     for _, f in TSHARK_EXTRA:
         cmd2 += ["-e", f]
+    bits = extcap_bool_bits()
+    cmd3 = ["tshark", "-r", path, "-T", "fields", "-E", "separator=/t", "-E", "occurrence=f"]
+    for n in bits:
+        cmd3 += ["-e", "wlan.extcap.b%d" % n]
     r = subprocess.run(cmd, capture_output=True, text=True)
     r2 = subprocess.run(cmd2, capture_output=True, text=True)
+    r3 = subprocess.run(cmd3, capture_output=True, text=True)
+    lines3 = r3.stdout.split("\n")
     if r.returncode != 0:
         raise RuntimeError("tshark 失败: " + r.stderr.strip()[:200])
     frames = []
@@ -150,6 +194,8 @@ def tshark_frames(path):
         p2 = (lines2[i].split("\t") if i < len(lines2) else []) + [""] * len(TSHARK_EXTRA)
         for j, (name, _) in enumerate(TSHARK_EXTRA):
             fr[name] = [int(x, 0) for x in p2[j].split(",") if x]
+        p3 = (lines3[i].split("\t") if i < len(lines3) else []) + [""] * len(bits)
+        fr["extcap_bits"] = [n for n, v in zip(bits, p3) if v == "True"]
         if (fr["type_subtype"] or 0) >> 4 != 0 or fr["type_subtype"] is None:
             for name in CONTENT_FIELDS:
                 fr[name] = None if name in fr and not isinstance(fr[name], list) else []
@@ -188,6 +234,7 @@ def _triplets(rec, key):
 
 def ours_frames(path):
     """本项目解析器对每一帧的解析结果，字段与 tshark_frames 对齐。读不开的文件抛异常。"""
+    import ie
     import radiotap
     import wifi_frame_parser as w
     _, recs = w.parse_pcap_file(path)
@@ -246,6 +293,21 @@ def ours_frames(path):
             "rsn_mfpc": _ie(r, "rsn", "mfpc"),
             "rsn_pmkid_count": None if _ie(r, "rsn", "pmkids") is None else len(_ie(r, "rsn", "pmkids")),
             "rsn_gmcs": _suite_part(r, "group_mgmt", 1),
+            "ht_caps": _ie(r, "ht_cap", "caps"),
+            "ht_ampdu": _ie(r, "ht_cap", "ampdu_param"),
+            "ht_mcs0": None if _ie(r, "ht_cap", "rx_mcs") is None else _ie(r, "ht_cap", "rx_mcs")[0],
+            "ht_txdef": _ie(r, "ht_cap", "tx_defined"),
+            "ht_rate": _ie(r, "ht_cap", "highest_rate"),
+            "ht_primary": _ie(r, "ht_op", "primary_channel"),
+            "ht_secoff": _ie(r, "ht_op", "secondary_offset"),
+            "ht_width": _ie(r, "ht_op", "width_any"),
+            "ht_rifs": _ie(r, "ht_op", "rifs"),
+            "ht_prot": _ie(r, "ht_op", "ht_protection"),
+            "ht_txrxneq": _ie(r, "ht_cap", "tx_rx_unequal"),
+            "ht_txunequal": _ie(r, "ht_cap", "tx_unequal_mod"),
+            **{"htcap_" + k: _ie(r, "ht_cap", k) for k in HT_FLAG_FIELDS},
+            "extcap_bits": None if _ie(r, "ext_caps", "octets") is None else
+                           [n for n in extcap_bool_bits() if ie.ext_cap_bit(_ie(r, "ext_caps", "octets"), n)],
             "rsn_pcs": _suite_list(r, "pairwise"),
             "rsn_akm": _suite_list(r, "akm"),
             "rt_length": rt.get("length"),
@@ -269,7 +331,7 @@ def ours_frames(path):
     return out
 
 
-LIST_FIELDS = [name for name, _ in TSHARK_EXTRA]       # 信息元素编号列表：按顺序整个比较
+LIST_FIELDS = [name for name, _ in TSHARK_EXTRA] + ["extcap_bits"]       # 信息元素编号列表：按顺序整个比较
 
 
 def compare(oracle, ours):

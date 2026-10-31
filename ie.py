@@ -158,6 +158,56 @@ def decode_rsn(d):
     return out
 
 
+# HT 能力信息（16 位小端）里的单个位
+HT_CAP_BITS = {"ldpc": 0, "width40": 1, "greenfield": 4, "short_gi20": 5, "short_gi40": 6, "tx_stbc": 7,
+               "delayed_ba": 10, "max_amsdu_7935": 11, "dsss_cck_40": 12, "psmp": 13, "forty_intolerant": 14,
+               "lsig_txop": 15}
+HT_CAP_LEN, HT_OP_LEN = 26, 22
+
+
+def decode_ht_cap(d):
+    """HT 能力（45，802.11n），26 字节：能力信息 2 + A-MPDU 参数 1 + 支持的 MCS 集 16 + 扩展能力 2 + 波束成形 4 + 天线选择 1。
+    MCS 集：位 0-76 是接收支持的 MCS，位 77-86 最高数据速率（Mbps，0 = 不声明），位 96 发送 MCS 集已定义，
+    位 97 发送与接收 MCS 集不同，位 98-99 发送最大空间流数 - 1，位 100 允许不均匀调制。长度不是 26 返回 None。"""
+    if len(d) != HT_CAP_LEN:
+        return None
+    caps = d[0] | d[1] << 8
+    mcs = bytes(d[3:19])
+    out = {"caps": caps, "sm_ps": caps >> 2 & 3, "rx_stbc": caps >> 8 & 3,
+           "ampdu_param": d[2], "ampdu_max_exp": d[2] & 3, "ampdu_density": d[2] >> 2 & 7,
+           "rx_mcs": mcs[:10], "highest_rate": (mcs[10] | mcs[11] << 8) & 0x3FF,
+           "tx_defined": bool(mcs[12] & 1), "tx_rx_unequal": bool(mcs[12] & 2),
+           "tx_max_streams": (mcs[12] >> 2 & 3) + 1, "tx_unequal_mod": bool(mcs[12] & 16),
+           "ext_caps": d[19] | d[20] << 8, "txbf": d[21] | d[22] << 8 | d[23] << 16 | d[24] << 24, "asel": d[25]}
+    out.update({k: bool(caps >> bit & 1) for k, bit in HT_CAP_BITS.items()})
+    return out
+
+
+def decode_ht_op(d):
+    """HT 操作（61），22 字节：主信道 1 + 操作信息 5 + 基本 MCS 集 16。
+    操作信息 1：位 0-1 次信道偏移（0 无、1 在主信道之上、3 在之下），位 2 任意信道宽度（1 = 可用 40 MHz），位 3 RIFS；
+    信息 2（16 位）：位 0-1 HT 保护，位 2 存在非 greenfield 站点，位 4 OBSS 非 HT 站点；
+    信息 3（16 位）：位 6 双信标，位 7 双 CTS，位 8 第二信标，位 9 L-SIG TXOP 保护，位 10 PCO 激活，位 11 PCO 阶段。"""
+    if len(d) != HT_OP_LEN:
+        return None
+    i1, i2, i3 = d[1], d[2] | d[3] << 8, d[4] | d[5] << 8
+    return {"primary_channel": d[0], "secondary_offset": i1 & 3, "width_any": bool(i1 >> 2 & 1), "rifs": bool(i1 >> 3 & 1),
+            "ht_protection": i2 & 3, "nongreenfield_present": bool(i2 >> 2 & 1), "obss_nonht": bool(i2 >> 4 & 1),
+            "dual_beacon": bool(i3 >> 6 & 1), "dual_cts": bool(i3 >> 7 & 1), "secondary_beacon": bool(i3 >> 8 & 1),
+            "lsig_protection": bool(i3 >> 9 & 1), "pco_active": bool(i3 >> 10 & 1), "pco_phase": bool(i3 >> 11 & 1),
+            "basic_mcs": bytes(d[6:22])}
+
+
+def decode_ext_caps(d):
+    """扩展能力（127）：变长位图，每个字节 8 个能力位，位号 = 字节序号 * 8 + 位。bit(n) 查某一位。"""
+    return {"octets": list(d)}
+
+
+def ext_cap_bit(octets, n):
+    """扩展能力的第 n 位；元素没有这么长时视为 0。"""
+    return bool(n // 8 < len(octets) and octets[n // 8] >> (n % 8) & 1)
+
+
 # 元素 ID -> (名字, 解码函数)
 DECODERS = {
     0: ("ssid", decode_ssid),
@@ -166,6 +216,9 @@ DECODERS = {
     5: ("tim", decode_tim),
     7: ("country", decode_country),
     42: ("erp", decode_erp),
+    45: ("ht_cap", decode_ht_cap),
+    61: ("ht_op", decode_ht_op),
+    127: ("ext_caps", decode_ext_caps),
     48: ("rsn", decode_rsn),
     50: ("ext_rates", decode_rates),
 }

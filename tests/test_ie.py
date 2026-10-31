@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """ie.walk：元素遍历（顺序、重复、扩展元素、被截断）。各子类型的固定部分长度由 tests/oracle 对照 tshark。"""
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -112,6 +113,74 @@ r = ie.decode_rsn(BASE + LE(0) + LE(0) + b"\x00\x0f\xac")
 check(r["pmkids"] == [] and r["group_mgmt"] is None, "组管理套件只剩 3 字节：读不出来（None），不是畸形")
 r = ie.decode_rsn(LE(1) + S(4) + LE(256) + S(4))
 check(r["malformed"] and r["pairwise"] is None, "计数是 16 位小端（0x0100 = 256），不能只看低字节")
+
+print("== HT 能力（45）==")
+
+
+def htcap(caps=0, ampdu=0, mcs=bytes(16), ext=0, txbf=0, asel=0):
+    return struct.pack("<HB", caps, ampdu) + mcs + struct.pack("<HIB", ext, txbf, asel)
+
+
+check(len(htcap()) == ie.HT_CAP_LEN == 26, "HT 能力元素 26 字节（2 + 1 + 16 + 2 + 4 + 1）")
+# 位号写成字面值（802.11n 的 HT Capabilities Info），不引用模块自己的表
+for name, bit in (("ldpc", 0), ("width40", 1), ("greenfield", 4), ("short_gi20", 5), ("short_gi40", 6), ("tx_stbc", 7),
+                  ("delayed_ba", 10), ("max_amsdu_7935", 11), ("dsss_cck_40", 12), ("psmp", 13), ("forty_intolerant", 14),
+                  ("lsig_txop", 15)):
+    r = ie.decode_ht_cap(htcap(caps=1 << bit))
+    others = [k for k in ie.HT_CAP_BITS if k != name and r[k]]
+    check(r[name] is True and not others, "能力位 %d 只置 %s" % (bit, name))
+check(set(ie.HT_CAP_BITS) == {"ldpc", "width40", "greenfield", "short_gi20", "short_gi40", "tx_stbc", "delayed_ba", "max_amsdu_7935",
+                              "dsss_cck_40", "psmp", "forty_intolerant", "lsig_txop"}, "单个位的能力共 12 项（SM 省电、RX STBC 是多位字段）")
+r = ie.decode_ht_cap(htcap(caps=0x0203))
+check((r["sm_ps"], r["rx_stbc"], r["ldpc"], r["width40"]) == (0, 2, True, True), "RX STBC 是 bit8-9（0x0200 -> 2）")
+r = ie.decode_ht_cap(htcap(caps=0x000c))
+check((r["sm_ps"], r["rx_stbc"]) == (3, 0), "SM 省电是 bit2-3（0x000c -> 3，即关闭）")
+r = ie.decode_ht_cap(htcap(ampdu=0x1b))
+check((r["ampdu_max_exp"], r["ampdu_density"], r["ampdu_param"]) == (3, 6, 0x1b), "A-MPDU 参数 0x1b：最大长度指数 3，最小间隔 6")
+mcs = b"\xff\xff" + bytes(8) + struct.pack("<H", 300) + bytes([0x1d, 0, 0, 0])
+r = ie.decode_ht_cap(htcap(mcs=mcs))
+check(r["rx_mcs"][:2] == b"\xff\xff" and len(r["rx_mcs"]) == 10 and r["highest_rate"] == 300, "MCS 集：接收位图 10 字节、最高速率 300")
+check((r["tx_defined"], r["tx_rx_unequal"], r["tx_max_streams"], r["tx_unequal_mod"]) == (True, False, 4, True), "发送 MCS 集 0x1d：已定义、收发相同、最多 4 个流、允许不均匀调制")
+r = ie.decode_ht_cap(htcap(mcs=bytes(10) + struct.pack("<H", 0xFFFF) + bytes([0x02, 0, 0, 0])))
+check(r["highest_rate"] == 0x3FF and r["tx_rx_unequal"] and not r["tx_defined"], "最高速率只有低 10 位；0x02 = 收发不同")
+r = ie.decode_ht_cap(htcap(ext=0x1234, txbf=0xAABBCCDD, asel=0x7e))
+check((r["ext_caps"], r["txbf"], r["asel"]) == (0x1234, 0xAABBCCDD, 0x7e), "扩展能力、波束成形、天线选择按小端")
+check(ie.decode_ht_cap(htcap()[:25]) is None and ie.decode_ht_cap(htcap() + b"\x00") is None, "长度不是 26：不合规")
+
+print("== HT 操作（61）==")
+
+
+def htop(primary=0, i1=0, i2=0, i3=0, basic=bytes(16)):
+    return bytes([primary, i1]) + struct.pack("<HH", i2, i3) + basic
+
+
+check(len(htop()) == ie.HT_OP_LEN == 22, "HT 操作元素 22 字节（1 + 5 + 16）")
+r = ie.decode_ht_op(htop(primary=36, i1=0x0d))
+check((r["primary_channel"], r["secondary_offset"], r["width_any"], r["rifs"]) == (36, 1, True, True), "主信道 36，次信道在上(1)，可用 40 MHz，RIFS")
+check(ie.decode_ht_op(htop(i1=0x03))["secondary_offset"] == 3 and not ie.decode_ht_op(htop(i1=0x03))["width_any"], "次信道偏移 3 = 在主信道之下；bit2 不置则不是任意宽度")
+r = ie.decode_ht_op(htop(i1=0x04))
+check(r["width_any"] and not r["rifs"] and r["secondary_offset"] == 0, "信息 1 的 bit2 只是「任意信道宽度」")
+r = ie.decode_ht_op(htop(i1=0x08))
+check(r["rifs"] and not r["width_any"] and r["secondary_offset"] == 0, "信息 1 的 bit3 只是 RIFS")
+r = ie.decode_ht_op(htop(i2=0x0017))
+check((r["ht_protection"], r["nongreenfield_present"], r["obss_nonht"]) == (3, True, True), "信息 2 = 0x0017：保护 3、存在非 greenfield、OBSS 非 HT")
+r = ie.decode_ht_op(htop(i2=0x0008))
+check((r["ht_protection"], r["nongreenfield_present"], r["obss_nonht"]) == (0, False, False), "信息 2 的 bit3 不属于这三项")
+for name, bit in (("dual_beacon", 6), ("dual_cts", 7), ("secondary_beacon", 8), ("lsig_protection", 9), ("pco_active", 10), ("pco_phase", 11)):
+    r = ie.decode_ht_op(htop(i3=1 << bit))
+    others = [k for k in ("dual_beacon", "dual_cts", "secondary_beacon", "lsig_protection", "pco_active", "pco_phase") if k != name and r[k]]
+    check(r[name] is True and not others, "信息 3 的 bit%d 只置 %s" % (bit, name))
+check(ie.decode_ht_op(htop(basic=bytes(range(16))))["basic_mcs"] == bytes(range(16)), "基本 MCS 集 16 字节")
+check(ie.decode_ht_op(htop()[:21]) is None and ie.decode_ht_op(htop() + b"\x00") is None, "长度不是 22：不合规")
+
+print("== 扩展能力（127）==")
+check(ie.decode_ext_caps(b"\x04\x00\x4a") == {"octets": [4, 0, 74]}, "扩展能力：原样的字节列表")
+check(ie.ext_cap_bit([1], 0) and not ie.ext_cap_bit([1], 1), "bit0 是第 0 字节的最低位")
+check(ie.ext_cap_bit([0, 0x08], 11) and not ie.ext_cap_bit([0, 0x08], 3), "bit11 = 第 1 字节的 bit3")
+check(ie.ext_cap_bit([0] * 7 + [0x40], 62), "bit62 = 第 7 字节的 bit6（操作模式通知）")
+check(ie.ext_cap_bit([0] * 9 + [0x10], 76) and not ie.ext_cap_bit([0] * 9 + [0x10], 75), "bit76 = 第 9 字节的 bit4")
+check(ie.ext_cap_bit([0] * 9 + [0x01], 72) and not ie.ext_cap_bit([0] * 9 + [0x01], 73), "bit72 = 第 9 字节的 bit0")
+check(not ie.ext_cap_bit([0xff], 8) and not ie.ext_cap_bit([], 0), "超出元素长度的位视为 0")
 
 print("== decode_all ==")
 els, _ = ie.walk(b"\x00\x01a\x00\x01b\x03\x01\x06\x05\x01\x00\xff\x02\x23\x00")

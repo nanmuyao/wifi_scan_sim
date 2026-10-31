@@ -86,6 +86,30 @@ def cases():
     out.append(("Beacon RSN version and group cipher only", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4)))))
     out.append(("Beacon RSN ends after AKM list", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(2)))))
     out.append(("Beacon RSN ends after capabilities", mgmt(8, 12, ie(0, b"r") + ie(48, le(1) + s(4) + le(1) + s(4) + le(1) + s(2) + le(0x0080)))))
+    # HT 能力 / 操作 / 扩展能力
+    def htcap(caps=0, ampdu=0x1b, rx=b"\xff\xff\x00\x00\x00", rate=0, mcs12=0, extcaps=0, txbf=0, asel=0):
+        mcs = (rx + bytes(10 - len(rx))) + struct.pack("<H", rate) + bytes([mcs12, 0, 0, 0])
+        return struct.pack("<HB", caps, ampdu) + mcs + struct.pack("<HIB", extcaps, txbf, asel)
+
+    def htop(primary=6, i1=0, i2=0, i3=0, basic=b"\xff"):
+        return bytes([primary, i1]) + struct.pack("<HH", i2, i3) + basic + bytes(15)
+
+    for bit in (0, 1, 4, 5, 6, 7, 10, 11, 12, 13, 14, 15):
+        out.append(("Beacon HT cap bit %d" % bit, mgmt(8, 12, ie(0, b"h") + ie(45, htcap(caps=1 << bit)))))
+    for v in (1, 2, 3):
+        out.append(("Beacon HT cap SM power save %d / RX STBC %d" % (v, v), mgmt(8, 12, ie(0, b"h") + ie(45, htcap(caps=v << 2 | v << 8)))))
+    out.append(("Beacon HT cap A-MPDU 0x1f, MCS 0-15, 300 Mbps, tx unequal", mgmt(8, 12, ie(0, b"h") + ie(45, htcap(ampdu=0x1f, rx=b"\xff\xff", rate=300, mcs12=0x1d)))))
+    out.append(("Beacon HT cap tx streams 4", mgmt(8, 12, ie(0, b"h") + ie(45, htcap(mcs12=0x0d)))))
+    for name, kw in (("secondary above, 40MHz, RIFS", dict(i1=0x0d, primary=36)), ("any width only", dict(i1=0x04)),
+                     ("RIFS only", dict(i1=0x08)), ("secondary below", dict(i1=0x03, primary=40)),
+                     ("protection 3 + non-greenfield + OBSS", dict(i2=0x0017)), ("dual beacon, dual CTS, PCO", dict(i3=0x0cc0)),
+                     ("channel 13", dict(primary=13))):
+        out.append(("Beacon HT operation: %s" % name, mgmt(8, 12, ie(0, b"o") + ie(45, htcap()) + ie(61, htop(**kw)))))
+    for n in (1, 3, 8, 10, 11):
+        for bit in sorted({0, 19, 62, 70, 84} & set(range(n * 8))):
+            octets = bytearray(n)
+            octets[bit // 8] |= 1 << (bit % 8)
+            out.append(("Beacon ext caps, %d bytes, only bit %d" % (n, bit), mgmt(8, 12, ie(0, b"x") + ie(127, bytes(octets)))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))
