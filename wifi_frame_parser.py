@@ -469,6 +469,7 @@ def parse_pcap_file(path):
         f = parse_frame_control(fc)
         fam, sub = type_name(f)
         rec["fam"], rec["sub"] = fam, sub
+        rec["ftype"], rec["fsubtype"] = f["type"], f["subtype"]   # 数字形式，差分测试按它对照 tshark
         try:
             if f["type"] == 1 or len(dot11) < 24:
                 rec.update(parse_ctrl_short(dot11))
