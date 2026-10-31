@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ESP32 WiFi 扫描仪表盘 (M4)</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --line:#334155; --fg:#e2e8f0;
+          --muted:#94a3b8; --accent:#38bdf8; --good:#4ade80; --bad:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system, "PingFang SC", "Microsoft YaHei", monospace; }
+  header { padding:16px 20px; border-bottom:1px solid var(--line);
+           display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  #conn { font-size:12px; color:var(--muted); }
+  #conn.ok { color:var(--good); } #conn.err { color:var(--bad); }
+  main { display:grid; grid-template-columns: 1fr 320px; gap:16px;
+         padding:16px 20px; max-width:1200px; margin:0 auto; }
+  @media (max-width:860px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:12px; padding:14px 16px; }
+  .card h2 { margin:0 0 10px; font-size:14px; color:var(--muted);
+             font-weight:600; letter-spacing:.05em; }
+  #meta { font-size:12px; color:var(--muted); display:flex; gap:18px;
+          flex-wrap:wrap; }
+  #meta b { color:var(--fg); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
+           white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  tr:last-child td { border-bottom:none; }
+  .rssi { font-variant-numeric: tabular-nums; }
+  .rssi.strong { color:var(--good); } .rssi.mid { color:var(--accent); }
+  .rssi.weak { color:var(--bad); }
+  .hidden { color:var(--muted); font-style:italic; }
+  #chBars div { display:flex; align-items:center; gap:8px; margin:6px 0;
+                font-size:12px; }
+  #chBars .lbl { width:36px; color:var(--muted); }
+  #chBars .bar { height:14px; background:var(--accent); border-radius:4px;
+                 min-width:2px; transition:width .4s; }
+  #chBars .num { color:var(--fg); }
+  #empty { color:var(--muted); padding:20px 0; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ESP32 WiFi 扫描仪表盘</h1>
+  <span id="conn">连接中…</span>
+</header>
+<main>
+  <section class="card">
+    <h2>AP 列表（按 RSSI 降序）</h2>
+    <div id="meta">
+      <span>更新 <b id="ts">-</b></span>
+      <span>当前信道 <b id="ch">-</b></span>
+      <span>AP 总数 <b id="apTotal">-</b></span>
+      <span>去重 <b id="apUnique">-</b></span>
+      <span>探测 <b id="probeTotal">-</b></span>
+    </div>
+    <table>
+      <thead><tr><th>SSID</th><th>BSSID</th><th>RSSI</th><th>CH</th>
+        <th>加密</th><th>beacons</th></tr></thead>
+      <tbody id="apRows"></tbody>
+    </table>
+    <div id="empty" style="display:none">暂无 AP 数据…</div>
+  </section>
+  <section class="card">
+    <h2>信道分布</h2>
+    <div id="chBars"></div>
+  </section>
+</main>
+<script>
+"use strict";
+(function () {
+  var connEl = document.getElementById("conn");
+  var ws = null, timer = null, fallbackTimer = null;
+  var maxBars = 10, chMax = 0;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;",
+               '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function rssiClass(v) {
+    if (v == null) return "";
+    if (v >= -60) return "strong";
+    if (v >= -75) return "mid";
+    return "weak";
+  }
+
+  function fmtTs(ts) {
+    if (ts == null) return "-";
+    var d = new Date(ts);
+    return ("0" + d.getHours()).slice(-2) + ":" +
+           ("0" + d.getMinutes()).slice(-2) + ":" +
+           ("0" + d.getSeconds()).slice(-2);
+  }
+
+  function render(msg) {
+    var aps = msg.aps || [];
+    var rows = aps.slice().sort(function (a, b) {
+      return (b.rssi == null ? -1e9 : b.rssi) - (a.rssi == null ? -1e9 : a.rssi);
+    });
+    var tbody = document.getElementById("apRows");
+    tbody.innerHTML = "";
+    document.getElementById("empty").style.display = rows.length ? "none" : "block";
+    rows.forEach(function (ap) {
+      var tr = document.createElement("tr");
+      var ssid = ap.ssid === "<hidden>" || !ap.ssid
+                 ? '<span class="hidden">&lt;hidden&gt;</span>'
+                 : esc(ap.ssid);
+      tr.innerHTML =
+        "<td>" + ssid + "</td>" +
+        "<td>" + esc(ap.bssid) + "</td>" +
+        '<td class="rssi ' + rssiClass(ap.rssi) + '">' +
+          (ap.rssi == null ? "-" : ap.rssi) + "</td>" +
+        "<td>" + (ap.channel == null ? "-" : ap.channel) + "</td>" +
+        "<td>" + esc(ap.authmode_name || "-") + "</td>" +
+        "<td>" + (ap.beacons || 1) + "</td>";
+      tbody.appendChild(tr);
+    });
+    document.getElementById("ts").textContent = fmtTs(msg.ts_ms);
+    document.getElementById("ch").textContent =
+        msg.channel == null ? "-" : msg.channel;
+    document.getElementById("apTotal").textContent = rows.length;
+    var uniq = {};
+    rows.forEach(function (a) { uniq[a.bssid] = 1; });
+    document.getElementById("apUnique").textContent =
+        Object.keys(uniq).length;
+    document.getElementById("probeTotal").textContent =
+        (msg.probes || []).length;
+
+    var dist = {};
+    rows.forEach(function (a) {
+      if (a.channel != null) dist[a.channel] = (dist[a.channel] || 0) + 1;
+    });
+    chMax = 0;
+    Object.keys(dist).forEach(function (ch) {
+      if (dist[ch] > chMax) chMax = dist[ch];
+    });
+    var bars = document.getElementById("chBars");
+    bars.innerHTML = "";
+    Object.keys(dist).sort(function (a, b) { return a - b; })
+      .forEach(function (ch) {
+        var w = chMax ? Math.round(dist[ch] / chMax * 100) : 0;
+        var div = document.createElement("div");
+        div.innerHTML =
+          '<span class="lbl">ch' + ch + "</span>" +
+          '<span class="bar" style="width:' + Math.max(w, 2) + '%"></span>' +
+          '<span class="num">' + dist[ch] + "</span>";
+        bars.appendChild(div);
+      });
+  }
+
+  function setConn(text, cls) {
+    connEl.textContent = text;
+    connEl.className = cls || "";
+  }
+
+  function onMessage(ev) {
+    try {
+      var msg = JSON.parse(ev.data);
+      if (msg && msg.type === "snapshot") render(msg);
+    } catch (e) { /* ignore malformed frame */ }
+  }
+
+  function connectWs() {
+    try {
+      var proto = location.protocol === "https:" ? "wss://" : "ws://";
+      ws = new WebSocket(proto + location.host + "/ws");
+    } catch (e) { ws = null; }
+    if (!ws) { startFallback(); return; }
+    ws.onopen = function () { setConn("已连接 WebSocket ✓", "ok"); };
+    ws.onmessage = onMessage;
+    ws.onclose = function () {
+      setConn("WebSocket 断开，切换轮询…", "err");
+      startFallback();
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+
+  function startFallback() {
+    if (fallbackTimer) return;
+    setConn("轮询模式 /api/snapshot", "err");
+    fetch("/api/snapshot").then(function (r) { return r.json(); })
+      .then(function (msg) { if (msg && msg.type === "snapshot") render(msg); })
+      .catch(function () {});
+    fallbackTimer = setInterval(function () {
+      fetch("/api/snapshot").then(function (r) { return r.json(); })
+        .then(function (msg) { if (msg && msg.type === "snapshot") render(msg); })
+        .catch(function () {});
+    }, 2000);
+  }
+
+  connectWs();
+})();
+</script>
+</body>
+</html>
