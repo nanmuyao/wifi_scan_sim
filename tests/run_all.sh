@@ -12,6 +12,7 @@ run() {
 tmp=$(mktemp -d)
 run "C 解析器单元测试" bash -c "gcc -Wall -Wextra -o $tmp/test_ap_parser test_ap_parser.c ap_parser.c && $tmp/test_ap_parser"
 run "STM32 工程与根目录的 ap_parser 一致" bash -c "cmp ap_parser.c stm32_project/Core/Src/ap_parser.c && cmp ap_parser.h stm32_project/Core/Inc/ap_parser.h"
+run "抓包文件读取（pcap / pcapng / gzip）" python3 tests/test_capture.py
 run "WPA2 握手 / CCMP" python3 tests/test_wpa2_handshake.py
 for t in esp32_project/tests/test_esp32_*.py; do
     run "$t" bash -c "cd esp32_project/tests && python3 $(basename "$t")"
