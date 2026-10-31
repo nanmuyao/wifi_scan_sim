@@ -234,6 +234,24 @@ Nonce、RSC、Key ID、MIC、Key Data 长度与内容、握手消息号，与 ts
 握手流程里 MIC 长度应由认证方式给定（`parse(buf, mic_len=…)`）。有一个真实帧（Suite-B 192 的第一个 M1）Key Data Length 写 0 但尾部多 22 字节，长度关系推不出，必须靠认证方式——测试里钉成「恰好 1 帧」。
 **消息号**：成对 M1-M4、组密钥 G1 / G2。M4 靠 Secure 位识别；WPA1 的 M4 没有 Secure 位，靠 Nonce 全 0 与 M2 区分。
 
+### 握手跟踪与 PTK 推导（D4b）
+`handshake80211.py`：从抓包里配对 M1 / M2（地址、Replay Counter），从 M2 的 Key Data 里的 RSN / WPA 元素读出认证方式（AKM）和密码套件，
+对每个候选 PMK（口令 + SSID 经 PBKDF2；直接给的 PMK；EAP 的 MSK）推导 PTK = KCK ‖ KEK ‖ TK，用 KCK 重算 M2 的 MIC。
+**MIC 吻合就证明了整条链**（PMK、地址、两个 nonce、哈希选择、KCK 长度）全对——AP 用真密钥算出的值，不依赖任何第三方实现。
+**结果：23 个握手全部通过**，覆盖 TKIP / CCMP-128 / CCMP-256 / GCMP-128 / GCMP-256 各套件，样例分布见 `tests/oracle/test_handshake_oracle.py` 的表：
+WPA2-PSK、EAP（msk）、WPA1/TKIP（HMAC-MD5）、PSK-SHA256、SAE、Suite-B 192（3 个握手，HMAC-SHA-384）、OWE 的三个 group、SAE-EXT-KEY 的两个样例（含多链路）。
+**第二把尺子**：其中 19 个的 KCK 或 TK 也与 tshark 打在帧上的完全相同；另 4 个 tshark 4.4 没给出可对照的值（owe-3-dh-groups 的 2 个、wpa3-sae-ext-key-group21、wpa3-mlo 各 1 个），只有 MIC 自证。
+**踩到的坑**：
+- OWE（AKM 18）的第 0 版描述符用的是 HMAC，不是 AES-CMAC（SAE 才是 CMAC）：MIC 算法由 AKM 决定，不是描述符版本。我只对 group 20 / 21 做对了，group 19 靠对照 tshark 的 KCK 才发现：
+  **我们的 KCK 和 tshark 的完全相同、MIC 却对不上**，说明推导没错、MIC 算法错了。
+- 多链路设备推导 PTK 用双方的 **MLD 地址**（关联请求 / 响应里的 Multi-Link 元素），不是各条链路的地址。
+- tshark 只在验证 M3 时才打 KCK：只有 M1 / M2 的抓包，要用 TK 来印证。TKIP 的 TK 是 32 字节，tshark 只打前 16 字节。
+**还没做**：
+- **重新握手**：它的 EAPOL 帧已被当前 PTK 加密，要边解密边跟踪。tshark 比我们多打出的 KCK / KEK / TK 都在这类样例里
+  （表中"多出"列：wpa-eap-tls 2 / 2 / 2、wpa-test-decode 1 / 1 / 2、wpa_ptk_extended_key_id 2 / 2 / 2），下一步（D4c）关闭。
+- 快速切换（FT）的 PTK 走 PMK-R0 / PMK-R1，阶段 E：wpa2-ft-eap、wpa2-ft-psk、wpa3-ft-sae-h2e 的握手我们一个也不处理，tshark 各有 1 组；TDLS 的 TPK 握手（wpa-test-decode-tdls 里 tshark 多 1 个 TK）。
+- 还没验证 KEK（M3 的 Key Data 解包）和 TK（数据帧 MIC）——下一步。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
