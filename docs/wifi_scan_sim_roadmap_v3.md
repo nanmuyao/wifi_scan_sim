@@ -252,6 +252,19 @@ WPA2-PSK、EAP（msk）、WPA1/TKIP（HMAC-MD5）、PSK-SHA256、SAE、Suite-B 1
 - 快速切换（FT）的 PTK 走 PMK-R0 / PMK-R1，阶段 E：wpa2-ft-eap、wpa2-ft-psk、wpa3-ft-sae-h2e 的握手我们一个也不处理，tshark 各有 1 组；TDLS 的 TPK 握手（wpa-test-decode-tdls 里 tshark 多 1 个 TK）。
 - 还没验证 KEK（M3 的 Key Data 解包）和 TK（数据帧 MIC）——下一步。
 
+### CCMP / GCMP 数据帧解密（D4c-1）
+`decrypt80211.py`：用握手推出的 TK 解密单播数据帧。CCMP 的 nonce = 优先级 ‖ A2 ‖ PN（高位在前），GCMP 的 IV = A2 ‖ PN；
+AAD = 帧控制（第 1 字节只留 `& 0x8F`；第 2 字节清掉重试 / 省电 / 更多数据，QoS 帧再清顺序位）‖ A1 A2 A3 ‖ 序号控制只留分片号 ‖ [A4] ‖ [QoS 控制只留 TID]。
+**结果**：样例里 tshark 解出明文的 AEAD 数据帧，549 帧与它的明文逐字节相同、MIC 全部通过。AAD 规则一次就对了，没有靠试错凑。
+另有 3 帧 tshark 解不开、我们解开了（owe-3-dh-groups 2 帧、wpa3-sae-ext-key-group21 1 帧）：它们用 64 字节的 PMK，tshark 4.4 加载不了。
+**没解开的，固定成数字**（`tests/oracle/test_decrypt_diff.py`）：
+- stale 506 帧：重新握手之后换了 PTK（wpa-test-decode 464、wpa-eap-tls 31、wpa_ptk_extended_key_id 11），重新握手的 EAPOL 是加密的，要边解密边跟踪（D4c-2）。
+- no_hs 115 帧：组播 / 广播 92 帧（GTK，要从 M3 / 组密钥握手的 Key Data 里解出）、FT 单播 21 帧（阶段 E）、TDLS 对端直连 2 帧（TPK）。
+- mgmt 6 帧：受保护的管理帧（PMF），nonce 和 AAD 的规则不同（wpa-test-decode-mgmt 3、wpa3-suiteb-192 3）。
+**测试**：`tests/test_decrypt.py` 用 pycryptodome 当独立加密方并手写 AAD，覆盖样例里没有的形态（非 QoS、四地址、HT 控制、子类型 10、被屏蔽的各位、分片号）；
+对 `decrypt80211.py` 的 13 处改动做了变异检查：全部被抓住（子类型掩码这一个起初只有空缺的测试漏掉，补了子类型 10 的用例后抓住）。
+TKIP、WEP 与 TKIP 变异体的击杀是下一小步。
+
 ### 阶段 D：加密与密钥层（逐个套件）
 按样例数量和难度排：
 1. 密钥协商补全：EAPOL-Key 版本 1/2/3（MIC 用 HMAC-MD5 / HMAC-SHA1 / AES-CMAC / HMAC-SHA384）、密钥派生用 SHA-1 / SHA-256 / SHA-384、AES 密钥包装（解出 GTK）、GTK 轮换、PMKID 校验。
