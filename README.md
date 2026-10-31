@@ -30,6 +30,7 @@ AIGC:
 | `docs/采购清单与接线方案.md` | 三档采购清单 + 接线图 | 经济档 ¥70 / 标准档 ¥200 / 进阶档 ¥1300（频谱版） |
 | `docs/ESP32版设计文档.md` | ESP32 版设计文档（阶段 5） | 硬件选型差异（ESP32 vs STM32+ESP8266）、软件架构（直扫→解析→聚合→WebSocket/Web Serial 仪表盘）、ESP-IDF/Wokwi/qemu 仿真路径、与阶段1-4 代码复用关系、里程碑拆分与验收标准 |
 | `docs/RTL-SDR频谱方案.md` | RTL-SDR 频谱方案可行性文档（阶段 6 · 路线B） | STM32F7 直解 vs PC 端 rtl_power vs 混合三方案对比、硬件需求与成本、数据率/FFT 瓶颈（4.8-6.4 MB/s I/Q 流 + DMA 乒乓）、软件架构建议、无硬件仿真路径（L1-L4）、可行性结论（F7 算力够、RTL-SDR 覆盖上限 ~1.7GHz 需 upconverter 才能看 2.4GHz WiFi） |
+| `docs/wifi_scan_sim_roadmap_v2.md` | 下一阶段规划（Roadmap v2，阶段 7-11） | 硬件实施（STM32+ESP8266 实物联调）、真实抓包+WPA2 解密实操验证、ESP32 版实现、可视化仪表盘、SDR 频谱仪落地；每阶段含目标/交付物/无硬件仿真路径/验收/优先级与依赖，附建议路线与可并行/跳过项 |
 
 ## 仿真层次
 
