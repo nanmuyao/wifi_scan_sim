@@ -208,6 +208,37 @@ def ext_cap_bit(octets, n):
     return bool(n // 8 < len(octets) and octets[n // 8] >> (n % 8) & 1)
 
 
+def decode_mobility_domain(d):
+    """移动域（54，802.11r 快速切换）：移动域 ID 2 字节（小端）+ FT 能力与策略 1 字节
+    （bit0 通过 DS 的 FT，bit1 支持资源请求协议）。长度必须是 3。"""
+    if len(d) != 3:
+        return None
+    return {"mdid": d[0] | d[1] << 8, "ft_capab": d[2], "ft_over_ds": bool(d[2] & 1), "resource_request": bool(d[2] >> 1 & 1)}
+
+
+def decode_bss_max_idle(d):
+    """BSS 最大空闲周期（90）：周期 2 字节（小端，单位 1000 TU）+ 选项 1 字节（bit0 要求受保护的保活帧）。长度必须是 3。"""
+    if len(d) != 3:
+        return None
+    return {"period": d[0] | d[1] << 8, "options": d[2], "protected_keepalive": bool(d[2] & 1)}
+
+
+# RSNXE 的能力位（整个元素按小端拼成一个整数）：bit0-3 是「后面还有几个字节」的长度字段，不是能力
+RSNX_BITS = {"protected_twt": 4, "sae_h2e": 5, "sae_pk": 6}
+
+
+def decode_rsnxe(d):
+    """RSN 扩展元素（244，802.11-2020）：变长的能力位图。bit0-3 = 长度字段（扩展字节数 - 1），
+    bit5 = SAE hash-to-element（H2E，WPA3 用新方式派生 SAE 密钥），bit6 = SAE-PK，bit4 = 受保护的 TWT。
+    其余位保留原样在 "value" 里，不命名。至少 1 字节。"""
+    if len(d) < 1:
+        return None
+    value = int.from_bytes(bytes(d), "little")
+    out = {"length_field": d[0] & 0x0F, "octets": list(d), "value": value}
+    out.update({k: bool(value >> bit & 1) for k, bit in RSNX_BITS.items()})
+    return out
+
+
 # ---------------------------------------------------------------------------
 # 厂商专用元素（221）：3 字节 OUI + 1 字节厂商自定义类型 + 数据。
 # OUI 0x0050f2（Microsoft / Wi-Fi 联盟早期）：类型 1 = WPA（WPA1），2 = WMM，4 = WPS。
@@ -296,6 +327,9 @@ DECODERS = {
     127: ("ext_caps", decode_ext_caps),
     48: ("rsn", decode_rsn),
     50: ("ext_rates", decode_rates),
+    54: ("mdie", decode_mobility_domain),
+    90: ("bss_max_idle", decode_bss_max_idle),
+    244: ("rsnxe", decode_rsnxe),
 }
 
 

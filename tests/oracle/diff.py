@@ -102,6 +102,13 @@ FIELDS += [("wmm_subtype", "wlan.wfa.ie.wme.subtype"), ("wmm_version", "wlan.wfa
            ("wmm_qos", "wlan.wfa.ie.wme.qos_info"), ("wmm_uapsd", "wlan.wfa.ie.wme.qos_info.ap.u_apsd"),
            ("wmm_psc", "wlan.wfa.ie.wme.qos_info.ap.parameter_set_count"),
            ("wpa_version", "wlan.wfa.ie.wpa.version"), ("wpa_mcs", "wlan.wfa.ie.wpa.mcs.type")]
+# 快速切换（移动域）、BSS 最大空闲周期、RSN 扩展元素
+FIELDS += [("mdid", "wlan.mobility_domain.mdid"), ("mde_ft_capab", "wlan.mobility_domain.ft_capab"),
+           ("mde_ft_over_ds", "wlan.mobility_domain.ft_capab.ft_over_ds"), ("mde_resource", "wlan.mobility_domain.ft_capab.resource_req"),
+           ("idle_period", "wlan.bss_max_idle.period"), ("idle_options", "wlan.bss_max_idle.options"),
+           ("idle_protected", "wlan.bss_max_idle.options.protected"),
+           ("rsnx", "wlan.rsnx"), ("rsnx_len", "wlan.rsnx.length"), ("rsnx_twt", "wlan.rsnx.protected_twt_operations_support"),
+           ("rsnx_h2e", "wlan.rsnx.sae_hash_to_element"), ("rsnx_pk", "wlan.rsnx.sae_pk")]
 WMM_AC = ("be", "bk", "vi", "vo")
 for _ac in WMM_AC:
     FIELDS += [("wmm_aifsn_" + _ac, "wlan.wfa.ie.wme.acp.aifsn_" + _ac), ("wmm_acm_" + _ac, "wlan.wfa.ie.wme.acp.acm_" + _ac),
@@ -112,7 +119,8 @@ CONTENT_FIELDS = {"ssid", "ds_channel", "dtim_count", "dtim_period", "tim_multic
                   "country_env", "erp", "erp_present", "erp_protection", "erp_barker", "rsn_version", "rsn_gcs",
                   "rsn_gcs_oui", "rsn_caps", "rsn_mfpr", "rsn_mfpc", "rsn_pmkid_count", "rsn_gmcs",
                   "ht_caps", "ht_ampdu", "ht_mcs0", "ht_txdef", "ht_rate", "ht_primary", "ht_secoff", "ht_width", "ht_rifs",
-                  "ht_prot", "extcap_bits", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "wmm_subtype", "wmm_version", "wmm_qos",
+                  "ht_prot", "extcap_bits", "mdid", "mde_ft_capab", "mde_ft_over_ds", "mde_resource", "idle_period", "idle_options", "idle_protected", "rsnx",
+                  "rsnx_len", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "vendor_oui", "wfa_type", "wpa_ucs", "wpa_akm", "wmm_subtype", "wmm_version", "wmm_qos",
                   "wmm_uapsd", "wmm_psc", "wpa_version", "wpa_mcs", *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "acm", "ecwmin", "ecwmax", "txop")], "ht_txrxneq", "ht_txunequal", *["htcap_" + k for k in HT_FLAG_FIELDS],
                   "rates", "ext_rates", "country_fcn", "country_nc", "country_mtpl", "rsn_pcs", "rsn_akm"}
 # 一帧里出现多次的字段（每个元素的内容是一串值）：整个列表按顺序比较
@@ -154,22 +162,24 @@ def _norm(name, v):
         return int(v, 16)
     if name in ("seq", "duration", "frag", "priority", "rt_length", "mactime", "freq", "antsignal", "antnoise",
                 "antenna", "db_antsignal", "quality", "mcs_index", "ampdu_ref", "rt_ts", "ds_channel", "dtim_count",
-                "dtim_period", "country_env", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
+                "dtim_period", "country_env", "idle_period", "rsnx_len", "wmm_subtype", "wmm_version", "wpa_version", "wpa_mcs",
                 *["wmm_%s_%s" % (k, ac) for ac in WMM_AC for k in ("aifsn", "ecwmin", "ecwmax", "txop")], "rsn_version", "rsn_gcs", "rsn_pmkid_count", "rsn_gmcs", "ht_rate",
                 "ht_primary"):
         return int(v, 16) if v.startswith("0x") else int(v)      # tshark 对有掩码的位字段按十六进制显示
-    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc"):
+    if name in ("ackpolicy", "htc", "llc_dsap", "rt_flags", "chan_flags", "rxflags", "fcs", "tim_offset", "erp", "rsn_caps", "rsn_gcs_oui", "ht_caps", "ht_ampdu", "ht_mcs0", "ht_secoff", "ht_prot", "wmm_qos", "wmm_psc", "mdid", "mde_ft_capab", "idle_options", "rsnx"):
         return int(v, 0)
     if name in ("ssid", "tim_bitmap"):
         return b"" if v == "<MISSING>" else bytes.fromhex(v)      # 长度为 0 的字节串，tshark 写成 <MISSING>
     if name == "country":
         return v
+    if name in ("mde_ft_over_ds", "mde_resource", "idle_protected"):      # 带掩码的位字段，显示成「掩码后的值」：非 0 就是置位
+        return int(v, 0) != 0
     if name == "datarate":
         return float(v)
     if name == "fcs_ok":                 # tshark 的校验状态：1 = 通过，0 = 不通过，其它 = 没校验
         return {"1": True, "0": False}.get(v)
     if name in ("retry", "protected", "tods", "fromds", "morefrag", "pwrmgt", "moredata", "order", "amsdu",
-                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal", "wmm_uapsd", *["wmm_acm_" + ac for ac in WMM_AC],
+                "tim_multicast", "erp_present", "erp_protection", "erp_barker", "rsn_mfpr", "rsn_mfpc", "ht_txdef", "ht_width", "ht_rifs", "ht_txrxneq", "ht_txunequal", "rsnx_twt", "rsnx_h2e", "rsnx_pk", "wmm_uapsd", *["wmm_acm_" + ac for ac in WMM_AC],
                 "htcap_ldpc", "htcap_width40", "htcap_greenfield", "htcap_short_gi20", "htcap_short_gi40", "htcap_tx_stbc",
                 "htcap_delayed_ba", "htcap_max_amsdu_7935", "htcap_dsss_cck_40", "htcap_psmp", "htcap_forty_intolerant",
                 "htcap_lsig_txop"):
@@ -341,6 +351,18 @@ def ours_frames(path):
             "ht_width": _ie(r, "ht_op", "width_any"),
             "ht_rifs": _ie(r, "ht_op", "rifs"),
             "ht_prot": _ie(r, "ht_op", "ht_protection"),
+            "mdid": _ie(r, "mdie", "mdid"),
+            "mde_ft_capab": _ie(r, "mdie", "ft_capab"),
+            "mde_ft_over_ds": _ie(r, "mdie", "ft_over_ds"),
+            "mde_resource": _ie(r, "mdie", "resource_request"),
+            "idle_period": _ie(r, "bss_max_idle", "period"),
+            "idle_options": _ie(r, "bss_max_idle", "options"),
+            "idle_protected": _ie(r, "bss_max_idle", "protected_keepalive"),
+            "rsnx": None if _ie(r, "rsnxe", "octets") is None else _ie(r, "rsnxe", "octets")[0],
+            "rsnx_len": _ie(r, "rsnxe", "length_field"),
+            "rsnx_twt": _ie(r, "rsnxe", "protected_twt"),
+            "rsnx_h2e": _ie(r, "rsnxe", "sae_h2e"),
+            "rsnx_pk": _ie(r, "rsnxe", "sae_pk"),
             "vendor_oui": _vendors(r, lambda v: v["oui"]),
             "wfa_type": _vendors(r, lambda v: v["type"], lambda v: v["oui"] == 0x0050F2),
             "wpa_ucs": _suite_list_of(r, "wpa", "pairwise"),

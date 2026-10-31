@@ -232,6 +232,28 @@ check(tspec["subtype"] == 2 and tspec["uapsd"] is None and tspec["param_set_coun
 els, _ = ie.walk(b"\xdd\x07\x00\x50\xf2\x02\x00\x01\x01" + b"\xdd\x07\x00\x50\xf2\x02\x00\x01\x02")
 check(ie.decode_all(els)["wmm"]["qos_info"] == 1 and len(ie.decode_all(els)["vendors"]) == 2, "两个 WMM 元素：wmm 取第一个，vendors 里有两个")
 
+print("== 移动域 / BSS 最大空闲周期 / RSNXE ==")
+m = ie.decode_mobility_domain(b"\x01\x02\x01")
+check(m == {"mdid": 0x0201, "ft_capab": 1, "ft_over_ds": True, "resource_request": False}, "移动域：ID 按小端（01 02 -> 0x0201），bit0 通过 DS 的 FT")
+m = ie.decode_mobility_domain(b"\xa1\xb2\x02")
+check(m["mdid"] == 0xb2a1 and not m["ft_over_ds"] and m["resource_request"], "移动域：bit1 资源请求协议；两个位不混")
+check(ie.decode_mobility_domain(b"\x01\x02") is None and ie.decode_mobility_domain(b"\x01\x02\x00\x00") is None, "移动域：长度必须是 3")
+b_ = ie.decode_bss_max_idle(struct.pack("<HB", 292, 1))
+check(b_ == {"period": 292, "options": 1, "protected_keepalive": True}, "BSS 最大空闲：周期 292（小端）、选项 bit0 受保护保活")
+check(ie.decode_bss_max_idle(struct.pack("<HB", 256, 0))["period"] == 256 and not ie.decode_bss_max_idle(struct.pack("<HB", 1, 2))["protected_keepalive"],
+      "周期 256（高字节为 1）；选项 bit1 不是保活位")
+check(ie.decode_bss_max_idle(b"\x01\x00") is None and ie.decode_bss_max_idle(b"\x01\x00\x00\x00") is None, "BSS 最大空闲：长度必须正好是 3（短了、长了都不合规）")
+r = ie.decode_rsnxe(b"\x20")
+check((r["length_field"], r["sae_h2e"], r["sae_pk"], r["protected_twt"]) == (0, True, False, False) and r["octets"] == [0x20], "RSNXE 0x20：只有 H2E（bit5）")
+for name, val in (("protected_twt", 0x10), ("sae_h2e", 0x20), ("sae_pk", 0x40)):
+    r = ie.decode_rsnxe(bytes([val]))
+    others = [k for k in ie.RSNX_BITS if k != name and r[k]]
+    check(r[name] is True and not others, "RSNXE 0x%02x 只置 %s" % (val, name))
+r = ie.decode_rsnxe(b"\x21\x03")
+check(r["length_field"] == 1 and r["value"] == 0x0321 and r["sae_h2e"] and not r["sae_pk"], "两个字节：长度字段 bit0-3 = 1，整个元素按小端拼成 0x0321")
+check(ie.decode_rsnxe(b"\x0f")["length_field"] == 15, "长度字段是 4 位（0x0f -> 15）")
+check(ie.decode_rsnxe(b"") is None, "RSNXE：空元素不合规")
+
 print("== decode_all ==")
 els, _ = ie.walk(b"\x00\x01a\x00\x01b\x03\x01\x06\x05\x01\x00\xff\x02\x23\x00")
 d = ie.decode_all(els)

@@ -102,7 +102,14 @@ WPA（WPA1：版本、组密码、成对套件、AKM；布局同 RSN，套件 OU
 **Wireshark 的一个命名问题**：WPA 元素的 AKM 类型被登记在 `wlan.wfa.ie.wpa.type` 这个名字下（和元素类型同名），
 `wlan.wfa.ie.wpa.akms.type` 永远是空的；差分工具改用同一棵树里完整的 32 位套件值 `wlan.wfa.ie.wpa.akms`。
 还没做的厂商元素：WPS（0x0050f2 类型 4）、Wi-Fi 联盟 0x506f9a 的 P2P / MBO / Hotspot 2.0 等，目前只有通用的 OUI / 类型 / 数据。
-下一步：FT / 移动域、RSNXE，最后是扩展元素 HE / EHT / Multi-Link。
+### 移动域、BSS 最大空闲周期、RSNXE（C2e）
+`decode_mobility_domain`（54：移动域 ID、通过 DS 的 FT、资源请求协议）、`decode_bss_max_idle`（90：周期、受保护保活）、
+`decode_rsnxe`（244：长度字段、受保护 TWT、SAE hash-to-element、SAE-PK；其余位保留原样不命名）。
+与 tshark 在 24 个样例上一致：移动域 38 帧、BSS 最大空闲 26 帧、RSNXE 25 帧（H2E 位在 WPA3 样例里置位）。
+这三种在样例里数量不多，所以另造了 16 个合成帧，把每一位单独置位逐个对照 tshark（RSNXE 的 bit4 / 5 / 6 各自单独验证了位号）。
+**没做**：FT 元素（55，FTE：MIC、ANonce、SNonce 和子元素）和「支持的运行类别」（59）。
+tshark 里它们的字段名没有规整的前缀，找不到可靠的对照字段；FTE 本身和 FT 握手的密钥层级相连，留到阶段 E 一起做。
+下一步：扩展元素 HE / EHT / Multi-Link（Multi-Link 一做完，前面登记的 4 帧嵌套缺口就能关掉）。
 还没对照的帧层内容：A-MSDU 内部结构、Action 帧各类别。
 
 ## 2. 验证方法（贯穿所有阶段）

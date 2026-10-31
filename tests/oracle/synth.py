@@ -126,6 +126,14 @@ def cases():
     out.append(("Beacon WPA element, 802.1X", mgmt(8, 12, ie(0, b"w") + ie(221, b"\x00\x50\xf2\x01" + le(1) + s(4, oui=b"\x00\x50\xf2") + le(1) + s(4, oui=b"\x00\x50\xf2") + le(1) + s(1, oui=b"\x00\x50\xf2")))))
     out.append(("Beacon WPS + unknown vendors in order", mgmt(8, 12, ie(0, b"v") + ie(221, b"\x00\x50\xf2\x04\x10\x4a\x00\x01\x10") + ie(221, b"\x00\x11\x22\x33\x44") + ie(221, wmm_param()) + ie(221, b"\xaa\xbb\xcc"))))
     out.append(("Beacon WPA, WMM, vendor, RSN together", mgmt(8, 12, ie(0, b"v") + ie(48, rsn_wpa2) + ie(221, wpa) + ie(221, wmm_param()))))
+    # 移动域 / BSS 最大空闲周期 / RSNXE
+    for capab in (0x00, 0x01, 0x02, 0x03):
+        out.append(("Beacon mobility domain, FT capab 0x%02x" % capab, mgmt(8, 12, ie(0, b"m") + ie(54, b"\x01\x02" + bytes([capab])))))
+    out.append(("Beacon mobility domain id 0xb2a1", mgmt(8, 12, ie(0, b"m") + ie(54, b"\xa1\xb2\x00"))))
+    for period, opt in ((292, 0), (65535, 1), (1, 1), (256, 0)):
+        out.append(("Beacon BSS max idle %d options %d" % (period, opt), mgmt(8, 12, ie(0, b"i") + ie(90, struct.pack("<HB", period, opt)))))
+    for octets in ((0x00,), (0x10,), (0x20,), (0x40,), (0x70,), (0x21, 0x03), (0xff, 0xff)):
+        out.append(("Beacon RSNXE %s" % ",".join("%02x" % o for o in octets), mgmt(8, 12, ie(0, b"x") + ie(244, bytes(octets)))))
     out.append(("Beacon + extension elements", mgmt(8, 12, IES + ie(0, b"\x13\x00", ext=92) + ie(0, b"\x01\x02\x03\x04", ext=200))))
     out.append(("Deauthentication, protected (body is ciphertext)", frame(0, 12, prot=1, body=b"\x07\x00" + b"\x00\x03abc\x30\x02\x01\x00" * 2)))
     out.append(("Beacon, last element cut short", mgmt(8, 12, ie(0, b"abc") + b"\x30\x14\x01\x00")))
