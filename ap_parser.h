@@ -20,6 +20,9 @@ int parse_cwlap(const char *buf, ap_info_t *aps, int max_aps);
 /* 判断 AT 响应是否收完：以单独一行的 OK / ERROR / FAIL 结尾（且已收到换行）返回 1 */
 int at_response_complete(const char *buf, int len);
 
+/* 判断 AT 响应是否成功：以单独一行的 OK 结尾（ERROR / FAIL 结尾返回 0，响应中间出现 "OK" 不算） */
+int at_response_ok(const char *buf, int len);
+
 /* 格式化打印一个 AP */
 void ap_print(const ap_info_t *ap);
 

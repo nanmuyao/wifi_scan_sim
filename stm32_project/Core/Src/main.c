@@ -67,8 +67,9 @@ void esp_send(const char *cmd)
     HAL_UART_Transmit(&huart1, (uint8_t *)cmd, strlen(cmd), 100);
 }
 
-/* 发送指令并等待返回，timeout_ms 超时返回 0 */
-int esp_wait(const char *cmd, const char *expect, uint32_t timeout_ms)
+/* 发送指令并等待返回：响应以 OK 行收尾返回 1；ERROR / FAIL 收尾或超时返回 0。
+ * 不能用 strstr(buf, "OK") 判成功——一个叫 "OK-Cafe" 的 AP 会让 FAIL 响应也含 "OK" */
+int esp_wait(const char *cmd, uint32_t timeout_ms)
 {
     wifi_len = 0;
     wifi_done = 0;
@@ -78,7 +79,7 @@ int esp_wait(const char *cmd, const char *expect, uint32_t timeout_ms)
     while (HAL_GetTick() - start < timeout_ms) {
         if (wifi_done) {
             wifi_done = 0;
-            return strstr((char *)wifi_buf, expect) ? 1 : 0;
+            return at_response_ok((const char *)wifi_buf, wifi_len);
         }
     }
     return 0;
@@ -111,17 +112,17 @@ int main(void)
     HAL_UART_Receive_IT(&huart1, &rx_byte, 1);   /* 首次启动中断接收 */
 
     /* 1. 基础握手 */
-    while (!esp_wait("AT\r\n", "OK", 2000)) {
+    while (!esp_wait("AT\r\n", 2000)) {
         HAL_Delay(500);
     }
-    esp_wait("AT+CWMODE=1\r\n", "OK", 1000);   /* Station 模式 */
+    esp_wait("AT+CWMODE=1\r\n", 1000);   /* Station 模式 */
 
     ap_info_t aps[MAX_AP_T];
     uint8_t ap_count = 0;
 
     while (1) {
         HAL_UART_Transmit(&huart2, (uint8_t *)"\r\n--- scan ---\r\n", 15, 100);
-        if (esp_wait("AT+CWLAP\r\n", "OK", 5000)) {
+        if (esp_wait("AT+CWLAP\r\n", 5000)) {
             ap_count = (uint8_t)parse_cwlap((const char *)wifi_buf, aps, MAX_AP_T);
             print_aps(aps, ap_count);
         } else {

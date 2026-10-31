@@ -181,6 +181,19 @@ int at_response_complete(const char *buf, int len)
            ends_with_token(buf, len, "FAIL");
 }
 
+/* 响应是否以单独一行的 OK 结尾。只看终止行，不在整个响应里找 "OK" 子串：
+ * 一个叫 "OK-Cafe" 的 AP 会让以 FAIL / ERROR 收尾的响应也含 "OK"。 */
+int at_response_ok(const char *buf, int len)
+{
+    if (!buf || len <= 0 || buf[len - 1] != '\n') {
+        return 0;
+    }
+    while (len > 0 && (buf[len - 1] == '\r' || buf[len - 1] == '\n')) {
+        len--;
+    }
+    return ends_with_token(buf, len, "OK");
+}
+
 /* 格式化打印一个 AP（STM32 侧可换成 HAL_UART_Transmit 输出） */
 void ap_print(const ap_info_t *ap)
 {

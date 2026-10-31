@@ -111,6 +111,22 @@ int main(void)
     check(AT_DONE("XOK\r\n") == 0, "OK 不是独立成行不误判");
     check(at_response_complete(NULL, 0) == 0, "NULL 安全返回 0");
 
+    printf("== test 8: AT 响应成功判定（只看终止行，不在全文找 OK） ==\n");
+    #define AT_OK(s) at_response_ok((s), (int)strlen(s))
+    check(AT_OK("OK\r\n") == 1, "单独 OK 行成功");
+    check(AT_OK("AT\r\r\n\r\nOK\r\n") == 1, "回显 + OK 成功");
+    check(AT_OK("+CWLAP:(3,\"a\",-1,\"aa:bb:cc:dd:ee:ff\",1)\r\nOK\r\n") == 1,
+          "CWLAP 响应以 OK 结尾成功");
+    check(AT_OK("ERROR\r\n") == 0, "ERROR 失败");
+    check(AT_OK("FAIL\r\n") == 0, "FAIL 失败");
+    check(AT_OK("+CWLAP:(3,\"OK-Cafe\",-40,\"00:11:22:33:44:55\",1)\r\n\r\nFAIL\r\n") == 0,
+          "SSID 含 OK 但以 FAIL 收尾判失败");
+    check(AT_OK("+CWLAP:(3,\"OK-Cafe\",-40,\"00:11:22:33:44:55\",1)\r\n") == 0,
+          "SSID 含 OK 且未收完不算成功");
+    check(AT_OK("OK") == 0, "无换行不算成功");
+    check(AT_OK("XOK\r\n") == 0, "OK 不是独立成行不算成功");
+    check(at_response_ok(NULL, 0) == 0, "NULL 安全返回 0");
+
     printf("\n结果: %s（%d 项失败）\n",
            failures == 0 ? "全部通过" : "存在失败", failures);
     return failures == 0 ? 0 : 1;
