@@ -26,12 +26,12 @@ import hmac
 import struct
 
 try:
-    from wifi_frame_parser import read_pcap, strip_radiotap
+    from wifi80211.parser import read_pcap, strip_radiotap
 except ImportError:  # 允许从任意目录直接运行
     import sys
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from wifi_frame_parser import read_pcap, strip_radiotap
+    from wifi80211.parser import read_pcap, strip_radiotap
 
 # IEEE 802.11i §8.5.1.3：PMK = PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 256 bits)
 PMK_SALT_SSID = b"IEEE"          # 标准向量使用的 SSID（roadmap 4.1.1）

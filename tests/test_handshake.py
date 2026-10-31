@@ -11,13 +11,13 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests", "oracle"))
-import eapol  # noqa: E402
-import frames80211 as fr  # noqa: E402
-import handshake80211 as hs  # noqa: E402
-import ft80211  # noqa: E402
-import groupkeys80211 as gk  # noqa: E402
-import kdf80211  # noqa: E402
-import ie  # noqa: E402
+from wifi80211 import eapol  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import handshake as hs  # noqa: E402
+from wifi80211 import ft as ft80211  # noqa: E402
+from wifi80211 import groupkeys as gk  # noqa: E402
+from wifi80211 import kdf  # noqa: E402
+from wifi80211 import ie  # noqa: E402
 import synth  # noqa: E402
 import wpa2_handshake as old  # noqa: E402
 
@@ -383,15 +383,15 @@ IGTK_ = bytes(range(80, 96))
 def reassoc_resp(kek, gtk=GTK_, igtk=IGTK_, key_id=2, klen=None, prot=0, bad_len=False, ap=NEW_AP, igtk_kek=None, dup=False, pad=0):
     sub = bytes([1, 6]) + R1KH_NEW
     if gtk is not None:
-        w = kdf80211.aes_key_wrap(kek, gtk)
+        w = kdf.aes_key_wrap(kek, gtk)
         g = struct.pack("<H", key_id) + bytes([len(gtk) if klen is None else klen]) + bytes(range(8)) + w
         g += bytes(pad)
         sub += bytes([2, len(g) - (1 if bad_len else 0)]) + g[:len(g) - (1 if bad_len else 0)]
         if dup:
-            g2 = struct.pack("<H", 3) + bytes([16]) + bytes(8) + kdf80211.aes_key_wrap(kek, bytes(16))
+            g2 = struct.pack("<H", 3) + bytes([16]) + bytes(8) + kdf.aes_key_wrap(kek, bytes(16))
             sub += bytes([2, len(g2)]) + g2
     if igtk is not None:
-        wi = kdf80211.aes_key_wrap(igtk_kek or kek, igtk)
+        wi = kdf.aes_key_wrap(igtk_kek or kek, igtk)
         ig = struct.pack("<H", 5) + bytes([1, 2, 3, 4, 5, 6]) + bytes([len(igtk)]) + wi
         sub += bytes([4, len(ig)]) + ig
     fte = bytes([55, 2 + 16 + 64 + len(sub)]) + bytes(2 + 16 + 64) + sub

@@ -9,8 +9,8 @@ CCMP / GCMP 帧体 = 8 字节头 ‖ 密文 ‖ MIC（CCMP-128 8 字节，CCMP-2
 """
 import struct
 
-import crypto80211 as c
-import kdf80211 as kdf
+from . import crypto as c
+from . import kdf
 
 MIC_LEN = {"CCMP-128": 8, "CCMP-256": 16, "GCMP-128": 16, "GCMP-256": 16}
 

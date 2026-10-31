@@ -8,9 +8,9 @@ from Crypto.Cipher import AES
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import decrypt80211 as dec  # noqa: E402
-import frames80211 as fr  # noqa: E402
-import wifi_frame_parser as w  # noqa: E402
+from wifi80211 import decrypt as dec  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import parser as w  # noqa: E402
 
 A1, A2, A3, A4 = (bytes([i] * 6) for i in (0x11, 0x22, 0x33, 0x44))
 MAC = lambda b: ":".join("%02x" % x for x in b)  # noqa: E731

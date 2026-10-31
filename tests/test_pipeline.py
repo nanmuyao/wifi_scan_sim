@@ -13,8 +13,8 @@ from Crypto.Cipher import ARC4
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests", "oracle"))
-import frames80211 as fr  # noqa: E402
-import pipeline80211 as pl  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import pipeline as pl  # noqa: E402
 import synth  # noqa: E402
 
 failures = []

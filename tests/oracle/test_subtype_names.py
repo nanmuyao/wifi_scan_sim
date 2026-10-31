@@ -12,7 +12,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-import wifi_frame_parser as w  # noqa: E402
+from wifi80211 import parser as w  # noqa: E402
 
 # 我们的名字 -> tshark 的名字，只列写法不同的；其余按「去掉标点、不分大小写」比较
 ALIAS = {

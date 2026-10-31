@@ -9,8 +9,8 @@ from Crypto.PublicKey import ECC
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import ie  # noqa: E402
-import sae80211 as sae  # noqa: E402
+from wifi80211 import ie  # noqa: E402
+from wifi80211 import sae  # noqa: E402
 
 failures = []
 

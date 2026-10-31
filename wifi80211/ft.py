@@ -13,7 +13,7 @@ Hash 与 KDF 用同一个：SHA-256（AKM 3 / 4 / 9）、SHA-384（13 / 19）、
 """
 import hashlib
 
-import kdf80211
+from . import kdf
 
 DIGEST_LEN = {"sha256": 32, "sha384": 48, "sha512": 64}
 
@@ -22,7 +22,7 @@ def derive_r0(xxkey, hash_name, ssid, mdid, r0kh_id, s0kh_id):
     """返回 (PMK-R0, PMKR0Name)。mdid 是元素里的 2 个原始字节。"""
     n = DIGEST_LEN[hash_name]
     context = bytes([len(ssid)]) + bytes(ssid) + bytes(mdid) + bytes([len(r0kh_id)]) + bytes(r0kh_id) + bytes(s0kh_id)
-    data = kdf80211.kdf(hash_name, xxkey, b"FT-R0", context, (n + 16) * 8)
+    data = kdf.kdf(hash_name, xxkey, b"FT-R0", context, (n + 16) * 8)
     pmk_r0, salt = data[:n], data[n:]
     name = getattr(hashlib, hash_name)(b"FT-R0N" + salt).digest()[:16]
     return pmk_r0, name
@@ -31,12 +31,12 @@ def derive_r0(xxkey, hash_name, ssid, mdid, r0kh_id, s0kh_id):
 def derive_r1(pmk_r0, hash_name, r0_name, r1kh_id, s1kh_id):
     """返回 (PMK-R1, PMKR1Name)。"""
     n = DIGEST_LEN[hash_name]
-    pmk_r1 = kdf80211.kdf(hash_name, pmk_r0, b"FT-R1", bytes(r1kh_id) + bytes(s1kh_id), n * 8)
+    pmk_r1 = kdf.kdf(hash_name, pmk_r0, b"FT-R1", bytes(r1kh_id) + bytes(s1kh_id), n * 8)
     name = getattr(hashlib, hash_name)(b"FT-R1N" + bytes(r0_name) + bytes(r1kh_id) + bytes(s1kh_id)).digest()[:16]
     return pmk_r1, name
 
 
 def derive_ptk(pmk_r1, hash_name, snonce, anonce, bssid, sta, kck_len, kek_len, tk_len):
     """返回 (KCK, KEK, TK)。"""
-    data = kdf80211.kdf(hash_name, pmk_r1, b"FT-PTK", bytes(snonce) + bytes(anonce) + bytes(bssid) + bytes(sta), (kck_len + kek_len + tk_len) * 8)
+    data = kdf.kdf(hash_name, pmk_r1, b"FT-PTK", bytes(snonce) + bytes(anonce) + bytes(bssid) + bytes(sta), (kck_len + kek_len + tk_len) * 8)
     return data[:kck_len], data[kck_len:kck_len + kek_len], data[kck_len + kek_len:]

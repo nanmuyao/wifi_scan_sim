@@ -13,13 +13,13 @@ import hashlib
 import hmac
 from collections import namedtuple
 
-import crypto80211  # noqa: F401  (保证 kdf80211 的依赖可导入)
-import decrypt80211 as dec
-import eapol
-import ft80211
-import frames80211 as fr
-import ie
-import kdf80211
+from . import crypto  # noqa: F401  (保证 kdf80211 的依赖可导入)
+from . import decrypt as dec
+from . import eapol
+from . import ft as ft80211
+from . import frames as fr
+from . import ie
+from . import kdf as kdf80211
 
 PAIRWISE_LABEL = b"Pairwise key expansion"
 OUI_IEEE, OUI_MS = 0x000FAC, 0x0050F2

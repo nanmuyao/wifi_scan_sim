@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import struct
 
-import crypto80211
+from . import crypto
 
 
 def prf_sha1(key, label, data, nbytes):
@@ -54,7 +54,7 @@ def _dbl(b):
 
 def aes_cmac(key, msg, taglen=16):
     """AES-CMAC，key 16 或 32 字节（AES-128 / 256）；返回前 taglen 字节。"""
-    l = crypto80211.aes_block(key, bytes(16))
+    l = crypto.aes_block(key, bytes(16))
     k1 = _dbl(l)
     k2 = _dbl(k1)
     n = (len(msg) + 15) // 16 or 1
@@ -63,8 +63,8 @@ def aes_cmac(key, msg, taglen=16):
     last = bytes(a ^ b for a, b in zip(last, k1)) if complete else bytes(a ^ b for a, b in zip(last + b"\x80" + bytes(15 - len(last)), k2))
     x = bytes(16)
     for i in range(n - 1):
-        x = crypto80211.aes_block(key, bytes(a ^ b for a, b in zip(x, msg[i * 16:(i + 1) * 16])))
-    return crypto80211.aes_block(key, bytes(a ^ b for a, b in zip(x, last)))[:taglen]
+        x = crypto.aes_block(key, bytes(a ^ b for a, b in zip(x, msg[i * 16:(i + 1) * 16])))
+    return crypto.aes_block(key, bytes(a ^ b for a, b in zip(x, last)))[:taglen]
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ def aes_key_wrap(kek, plaintext):
     r = [plaintext[i * 8:(i + 1) * 8] for i in range(n)]
     for j in range(6):
         for i in range(n):
-            b = crypto80211.aes_block(kek, a + r[i])
+            b = crypto.aes_block(kek, a + r[i])
             t = n * j + i + 1
             a = (int.from_bytes(b[:8], "big") ^ t).to_bytes(8, "big")
             r[i] = b[8:]
@@ -112,4 +112,4 @@ def aes_key_unwrap(kek, ciphertext):
 
 def rc4_key_unwrap(kek, iv, data):
     """EAPOL-Key 描述符版本 1：RC4 密钥 = Key IV(16) ‖ KEK(16)，丢掉前 256 字节密钥流，再解密 Key Data。"""
-    return crypto80211.rc4(bytes(iv) + bytes(kek), bytes(256) + bytes(data))[256:]
+    return crypto.rc4(bytes(iv) + bytes(kek), bytes(256) + bytes(data))[256:]

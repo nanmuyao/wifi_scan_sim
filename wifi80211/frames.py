@@ -7,9 +7,9 @@ import struct
 import zlib
 from collections import namedtuple
 
-import capture
-import radiotap
-import wifi_frame_parser as w
+from . import capture
+from . import radiotap
+from . import parser as w
 
 # n：帧号（从 1 起，和 tshark 的 frame.number 一致）；dot11：完整的 802.11 帧（FCS 已去掉）；
 # h：parse_mac_header 的结果；body：MAC 头之后的字节；fcs_ok：有 FCS 时校验是否通过，没有 FCS 为 None

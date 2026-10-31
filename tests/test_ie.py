@@ -6,7 +6,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import ie  # noqa: E402
+from wifi80211 import ie  # noqa: E402
 
 failures = []
 

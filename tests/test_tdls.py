@@ -13,7 +13,7 @@ from Crypto.Cipher import AES
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-import tdls80211 as t  # noqa: E402
+from wifi80211 import tdls as t  # noqa: E402
 from aead_build import A1, A2, A3, build, frame  # noqa: E402
 
 failures = []

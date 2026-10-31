@@ -7,7 +7,7 @@ import random
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import crypto80211 as c  # noqa: E402
+from wifi80211 import crypto as c  # noqa: E402
 from Crypto.Cipher import AES  # noqa: E402
 
 failures = []

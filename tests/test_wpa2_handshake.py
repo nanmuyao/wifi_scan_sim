@@ -179,7 +179,7 @@ def main():
           diff == [1, 22], str(diff))
 
         # 从 fixture 提取 CCMP 加密 QoS Data 帧并解密
-        from wifi_frame_parser import read_pcap, strip_radiotap
+        from wifi80211.parser import read_pcap, strip_radiotap
         _, raw_pkts, _ = read_pcap(fx)
         ccmp = None
         for rec in raw_pkts:

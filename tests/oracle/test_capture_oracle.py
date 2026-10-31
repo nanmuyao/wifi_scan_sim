@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
-import capture  # noqa: E402
+from wifi80211 import capture  # noqa: E402
 import fetch_samples  # noqa: E402
 
 # tshark 的 frame.encap_type -> pcap 链路类型

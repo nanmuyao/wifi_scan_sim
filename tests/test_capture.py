@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import capture  # noqa: E402
+from wifi80211 import capture  # noqa: E402
 
 failures = []
 

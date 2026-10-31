@@ -13,7 +13,7 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import crypto80211 as c  # noqa: E402
+from wifi80211 import crypto as c  # noqa: E402
 import decrypt_oracle as d  # noqa: E402
 import synth  # noqa: E402
 

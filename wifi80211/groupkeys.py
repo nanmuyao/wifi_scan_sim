@@ -10,12 +10,12 @@ WPA1（描述符 254）没有 KDE：Key Data 就是 GTK 本身，序号在 Key I
 """
 from collections import namedtuple
 
-import decrypt80211 as dec
-import eapol
-import frames80211 as fr
-import handshake80211 as hs
-import ie
-import kdf80211
+from . import decrypt as dec
+from . import eapol
+from . import frames as fr
+from . import handshake as hs
+from . import ie
+from . import kdf
 
 # n：EAPOL 帧号；ap：发送 GTK 的 AP（组播帧的 A2 / BSSID）；igtk：(序号, IPN, 密钥) 或 None；source：M3 / G1
 GroupKey = namedtuple("GroupKey", "n ap key_id tx gtk igtk source")
@@ -28,10 +28,10 @@ def unwrap_key_data(kek, e):
     """解出 EAPOL-Key 的 Key Data 明文；完整性校验不过（密钥不对）返回 None。"""
     data = e["data"]
     if e["descriptor"] == 254 or e["key_info"]["version"] == 1:
-        return kdf80211.rc4_key_unwrap(kek, e["iv"], data)
+        return kdf.rc4_key_unwrap(kek, e["iv"], data)
     if len(data) % 8 or len(data) < 24:
         return None
-    pt, ok = kdf80211.aes_key_unwrap(kek, data)
+    pt, ok = kdf.aes_key_unwrap(kek, data)
     return pt if ok else None
 
 
@@ -168,13 +168,13 @@ def _ft_group_key(f, done):
         return None
     ap, sta = h["addr2"], h["addr1"]
     for x in sorted((x for x in done if x.ap == ap and x.sta == sta and x.frames["m2"] < f.n), key=lambda x: -x.frames["m2"]):
-        gtk, ok = kdf80211.aes_key_unwrap(x.kek, g[11:])
+        gtk, ok = kdf.aes_key_unwrap(x.kek, g[11:])
         if not ok or len(gtk) != g[2]:
             continue
         igtk = None
         ig = subs.get(4)
         if ig is not None and len(ig) >= 9 + 24 and (len(ig) - 9) % 8 == 0:
-            key, ok2 = kdf80211.aes_key_unwrap(x.kek, ig[9:])
+            key, ok2 = kdf.aes_key_unwrap(x.kek, ig[9:])
             if ok2 and len(key) == ig[8]:
                 igtk = (ig[0] | ig[1] << 8, bytes(ig[2:8]), key)
         return GroupKey(f.n, ap, g[0] & 3, True, gtk, igtk, "FT")

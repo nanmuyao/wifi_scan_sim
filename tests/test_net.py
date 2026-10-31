@@ -13,7 +13,7 @@ from scapy.all import IPv6ExtHdrDestOpt, ARP, DHCP, ICMP, IP, TCP, UDP, BOOTP, E
 conf.verb = 0
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import net80211 as net  # noqa: E402
+from wifi80211 import net  # noqa: E402
 
 failures = []
 

@@ -8,8 +8,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-import decrypt80211 as dec  # noqa: E402
-import wifi_frame_parser as w  # noqa: E402
+from wifi80211 import decrypt as dec  # noqa: E402
+from wifi80211 import parser as w  # noqa: E402
 from aead_build import A1, A2, A3, A4, build, frame  # noqa: E402,F401
 
 failures = []
@@ -113,8 +113,8 @@ check(dec.wep_keys([("wep", "1234567890"), ("wep", "zz"), ("wep", "0102"), ("wpa
 
 print("== TKIP：Michael 的密钥方向、DA / SA、优先级、分片 ==")
 import struct  # noqa: E402
-import crypto80211 as c  # noqa: E402
-import frames80211 as fr  # noqa: E402
+from wifi80211 import crypto as c  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
 
 TKT = bytes(range(32))
 MK_AP, MK_STA = TKT[16:24], TKT[24:32]

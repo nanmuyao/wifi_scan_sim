@@ -6,7 +6,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import wifi_frame_parser as w  # noqa: E402
+from wifi80211 import parser as w  # noqa: E402
 
 failures = []
 

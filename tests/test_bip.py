@@ -12,10 +12,10 @@ from Crypto.Hash import CMAC
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
-import decrypt80211 as dec  # noqa: E402
-import frames80211 as fr  # noqa: E402
-import groupkeys80211 as gk  # noqa: E402
-import wifi_frame_parser as w  # noqa: E402
+from wifi80211 import decrypt as dec  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import groupkeys as gk  # noqa: E402
+from wifi80211 import parser as w  # noqa: E402
 
 failures = []
 

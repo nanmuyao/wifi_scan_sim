@@ -14,9 +14,9 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import decrypt_oracle as d  # noqa: E402
 import fetch_samples  # noqa: E402
-import frames80211 as fr  # noqa: E402
-import groupkeys80211 as gk  # noqa: E402
-import handshake80211 as hs  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import groupkeys as gk  # noqa: E402
+from wifi80211 import handshake as hs  # noqa: E402
 
 failures = []
 

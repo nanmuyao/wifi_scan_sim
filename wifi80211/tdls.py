@@ -15,9 +15,9 @@ TDLS（直连链路建立，802.11z）：两个站点经过 AP 交换三条 TDLS
 import hashlib
 from collections import namedtuple
 
-import decrypt80211 as dec
-import ie
-import kdf80211
+from . import decrypt as dec
+from . import ie
+from . import kdf
 
 ETHERTYPE = 0x890D
 SETUP_REQUEST, SETUP_RESPONSE, SETUP_CONFIRM = 0, 1, 2
@@ -69,7 +69,7 @@ def parse_action(data):
 def derive_tpk(snonce, anonce, initiator, responder, bssid):
     """返回 (TPK-KCK, TPK-TK)，地址是 6 字节。"""
     key_input = hashlib.sha256(min(snonce, anonce) + max(snonce, anonce)).digest()
-    tpk = kdf80211.kdf("sha256", key_input, b"TDLS PMK", min(initiator, responder) + max(initiator, responder) + bssid, 256)
+    tpk = kdf.kdf("sha256", key_input, b"TDLS PMK", min(initiator, responder) + max(initiator, responder) + bssid, 256)
     return tpk[:16], tpk[16:]
 
 
@@ -81,7 +81,7 @@ def mic_of(kck, action, msg):
     zeroed = fte[:4] + bytes(mic_len) + fte[4 + mic_len:]
     initiator, responder = bytes.fromhex(msg["initiator"].replace(":", "")), bytes.fromhex(msg["responder"].replace(":", ""))
     data = initiator + responder + bytes([seq]) + msg["link_raw"] + msg["rsne_raw"] + msg["timeout_raw"] + zeroed
-    return kdf80211.aes_cmac(kck, data, 16)
+    return kdf.aes_cmac(kck, data, 16)
 
 
 def track(msdus):

@@ -60,8 +60,9 @@ AIGC:
 | `Dockerfile` / `tests/docker.sh` / `tests/run_all.sh` | Docker 测试环境与一键脚本 | gcc + Python + pycryptodome + scapy 固定版本；`bash tests/docker.sh` 跑全部测试 |
 | `ap_parser.c` / `ap_parser.h` | CWLAP 解析库（纯 C） | STM32 核心解析逻辑，无 HAL 依赖，PC 可直接编译测试 |
 | `test_ap_parser.c` | 解析器单元测试 | 7 组用例：正常多 AP / 隐藏 SSID / 转义字符 / 空响应 / 干扰行 / 非法参数 / AT 响应收尾判定 |
-| `wifi_frame_parser.py` | 802.11 帧解析器（纯手写） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；可读 pcap 文件逐帧解析 |
-| `wpa2_handshake.py` | WPA2 密钥推导 + EAPOL 四次握手解析 + CCMP 解密（纯手写，阶段 4） | `--pmk`：PBKDF2-HMAC-SHA1 推导 PMK（含 802.11i 标准向量校验）；`--pcap`：从 pcap 提取 EAPOL-Key，区分握手 1/4~4/4，输出 ANonce/SNonce/MIC/Key Info 并对 M2~M4 做 MIC 校验；`--ptk`：PRF-512 展开 PTK 并切分 KCK/KEK/TK（4.1.3）；4.1.5：AES-128-CCM 手写拼装，TK 解 CCMP 加密 QoS Data 帧并校验 8 字节 MIC |
+| `wifi80211/` | 802.11 解析、解密与密钥推导的 Python 参考实现（包，纯标准库） | 抓包读取（pcap / pcapng）、radiotap、MAC 头与管理帧、信息元素、Action、A-MSDU；加密原语与密钥派生；EAPOL-Key、四次握手、FT 快速切换、组密钥（GTK / IGTK / 多链路）；CCMP / GCMP / TKIP / WEP / BIP 解密、TDLS；SAE / OWE 的公开部分；解密后的 LLC / ARP / IP / UDP / TCP / ICMP / DHCP；`pipeline.decrypt_capture(frames, keys)` 把各层接起来。模块列表见 `wifi80211/__init__.py`，进度与验证方法见 `docs/wifi_scan_sim_roadmap_v3.md` |
+| `wifi_frame_parser.py` | 帧解析器命令行入口（实现在 `wifi80211/parser.py`） | 解析 Beacon / Probe Request / 加密数据帧；scapy 仅用于生成标准测试帧；`--pcap` 读 pcap 文件逐帧解析 |
+| `wpa2_handshake.py` | **早期**的 WPA2 密钥推导（已被 `wifi80211/` 取代，保留作历史与命令行演示；它按三地址、小端 EAPOL 的简化假设写成，对真实抓包不成立） + EAPOL 四次握手解析 + CCMP 解密（纯手写，阶段 4） | `--pmk`：PBKDF2-HMAC-SHA1 推导 PMK（含 802.11i 标准向量校验）；`--pcap`：从 pcap 提取 EAPOL-Key，区分握手 1/4~4/4，输出 ANonce/SNonce/MIC/Key Info 并对 M2~M4 做 MIC 校验；`--ptk`：PRF-512 展开 PTK 并切分 KCK/KEK/TK（4.1.3）；4.1.5：AES-128-CCM 手写拼装，TK 解 CCMP 加密 QoS Data 帧并校验 8 字节 MIC |
 | `tests/test_wpa2_handshake.py` | 阶段 4 单元测试 | PMK 标准向量（password/IEEE）+ M1~M4 手工构造帧 + pcap 全链路 + 4.1.3 PTK 推导 / 4.1.4 MIC 校验（含错口令反向用例与 TKIP 跳过）/ 4.1.5 CCMP 解密（还原 LLC/SNAP+IP、AAD 屏蔽位、错 TK 反向），全部通过时退出码 0 |
 | `tools/make_wpa2_handshake_pcap.py` | 生成四次握手 + CCMP 加密数据帧 pcap 样本 | 用 scapy 构造 802.11 QoS Data + LLC/SNAP + EAPOL M1/M2/M3/M4（KCK 计算真实 MIC）+ 1 帧 CCMP 加密 QoS Data（TK 加密 LLC/SNAP+IP），输出到 `tests/fixtures/wpa2_handshake.pcap` |
 | `stm32_project/` | STM32 完整工程（CubeMX .ioc + 源码） | F103C8T6 + USART1(ESP8266) + USART2(调试)，复用 ap_parser 解析库，修正逐字节接收缓冲、NUL 结尾、帧结束判定（看 OK/ERROR/FAIL 终止行）三处隐患 |

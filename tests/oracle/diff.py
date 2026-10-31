@@ -387,9 +387,9 @@ def _triplets(rec, key):
 
 def ours_frames(path):
     """本项目解析器对每一帧的解析结果，字段与 tshark_frames 对齐。读不开的文件抛异常。"""
-    import ie
-    import radiotap
-    import wifi_frame_parser as w
+    from wifi80211 import ie
+    from wifi80211 import radiotap
+    from wifi80211 import parser as w
     _, recs = w.parse_pcap_file(path)
     out = []
     for r in recs:

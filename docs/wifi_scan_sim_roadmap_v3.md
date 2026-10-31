@@ -434,24 +434,28 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 - 还没做：Wireshark 测试套件里对解密结果的具体断言（如「Who has 192.168.5.18」「DHCP ACK」的出现次数）没有逐条照搬，我们对 tshark 的逐帧字段对照覆盖了同样的东西，但不是它们的原话。
 
 ### 阶段 G（可选）：Wi-Fi 7 与其他
-- MLO（Multi-Link）：`wpa-mlo-ccmp`、`wpa3-mlo`；TDLS（`wpa-test-decode-tdls`）；Mesh 元素；Extended Key ID（`wpa_ptk_extended_key_id`）。
+- MLO（Multi-Link）、TDLS、Extended Key ID 已完成（见上面各节）。Mesh 元素没有样例可对，未做。
 
 ## 4. 完成度矩阵（每阶段结束更新）
 
 | 协议能力 | 阶段 | 对照样例 | 状态 |
 |---|---|---|---|
-| 帧层逐帧与 tshark 一致 | B | 全部 24 个 | 待做 |
-| 信息元素 23/23 + 扩展 8/8 | C | 全部 24 个 | 待做（现 4/23、0/8） |
-| WPA2-PSK / CCMP-128 | 已有 | `wpa-Induction`、`wpa-test-decode` | 已有，但公开样例要先能打开（阶段 B0）才能复验 |
-| 阶段 A：标准答案与差分工具 | A | 全部 24 个 | **已完成**（tshark 4.4.19、固定提交的样例下载、差分工具、基线 0/24） |
-| TKIP、WEP | D | `wpa2-psk-ccmp-tkip`、`wep` | 待做 |
-| CCMP-256、GCMP | D | `wpa-ccmp-256`、`wpa-gcmp*` | 待做 |
-| PMF（BIP） | D | `wpa2-psk-mfp` | 待做 |
-| WPA3-SAE | E | `wpa3-sae*` | 待做 |
-| OWE | E | `owe*` | 待做 |
-| FT（802.11r） | E | `wpa2-ft-*`、`wpa3-ft-*` | 待做 |
-| Suite-B 192 | E | `wpa3-suiteb-192` | 待做 |
-| MLO / TDLS / Mesh | G | 对应样例 | 可选 |
+| 阶段 A：标准答案与差分工具 | A | 全部 24 个 | **已完成**（tshark 4.4.19、固定提交的样例下载、差分工具） |
+| 帧层（抓包格式、radiotap、MAC 头变体、FCS、A-MSDU、Action） | B | 全部 24 个 | **已完成**，与 tshark 逐帧一致，已知差异固定在表里 |
+| 信息元素与扩展元素 | C | 全部 24 个 | **已完成**（含 RSN、HT、HE、Multi-Link、FTE、移动域等），逐字段对照 tshark |
+| 4 次握手与 PTK（AKM 1–25 各档哈希、MIC 算法） | D | 全部 | **已完成**：34 个握手 + 3 次 FT 漫游共 37 个，全部由 M2 的 MIC 自证，29–30 个也有 tshark 的 KCK / TK |
+| CCMP-128/256、GCMP-128/256、TKIP（含 Michael）、WEP | D | `wpa-*`、`wpa2-psk-ccmp-tkip`、`wep` | **已完成**：tshark 能解的帧全部逐字节一致，另有 22 个 tshark 解不了的帧靠 MIC 判断 |
+| PMF：受保护的管理帧、BIP-CMAC / GMAC | D | `wpa2-psk-mfp`、`wpa3-suiteb-192` | 管理帧解密 **已完成**；BIP 在 IGTK 上已验证（1 帧真实 MIC 吻合），**BIGTK 保护的信标（2 帧）规则未弄清，标 unsupported** |
+| 组密钥（M3 / G1 / FT 响应；GTK / IGTK / MLO 每链路） | D / G | 全部 | **已完成**：Wireshark 公布的 20 个 GTK 全部被推出 |
+| FT（802.11r）：PMK-R0 / R1、初始握手、空中漫游 | E | `wpa2-ft-*`、`wpa3-ft-*` | **已完成**（PMKR1Name 与 MIC 双证明，漫游由重关联请求的 FTE MIC 验证） |
+| Suite-B 192 / OWE / SAE-EXT-KEY 的握手 | E | `wpa3-suiteb-192`、`owe*`、`wpa3-sae-ext-key-group21` | **已完成**（给定 PMK） |
+| SAE / OWE 的 PMK 推导（口令、私有随机数） | E | — | **做不到**（样例只公开了 PMK，没有私有值）；公开部分（commit / confirm、曲线上的点）已做 |
+| MLO（多链路） | G | `wpa3-mlo`、`wpa-mlo-ccmp` | wpa3-mlo **已完成**（Wireshark 公布的 1 个 TK、4 个 GTK 全部推出）；wpa-mlo-ccmp 的数据帧缺关联帧（拿不到 MLD 地址），只能解管理帧 |
+| TDLS | G | `wpa-test-decode-tdls` | **已完成**（TPK、两个 MIC、直连帧） |
+| Extended Key ID | G | `wpa_ptk_extended_key_id` | **已完成**（新旧两把 PTK 靠 MIC 区分） |
+| 解密后的内容（ARP / IP / UDP / TCP / ICMP / DHCP）与校验和 | F | 全部 | **已完成**：1301 个数据帧，校验和全部吻合（13 个测试图案的 ICMP 例外，tshark 同报 Bad） |
+| Mesh 元素 | G | 无样例 | 未做 |
+| 包 `wifi80211/` | — | — | **已完成**（模块列表见 `wifi80211/__init__.py`；`wpa2_handshake.py` 是早期实现，保留作历史） |
 
 ## 5. 硬件怎么看（给不熟悉硬件的读者）
 

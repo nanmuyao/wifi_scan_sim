@@ -12,8 +12,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fetch_samples  # noqa: E402
-import frames80211 as fr  # noqa: E402
-import ie  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import ie  # noqa: E402
 
 failures = []
 

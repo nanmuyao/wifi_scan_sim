@@ -12,7 +12,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, ROOT)
-import action  # noqa: E402
+from wifi80211 import action  # noqa: E402
 
 failures = []
 

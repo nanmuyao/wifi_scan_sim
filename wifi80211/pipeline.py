@@ -5,11 +5,11 @@
 顺序：4 次握手 / 重新握手 / FT 漫游推出的 PTK（handshake80211），M3 / G1 / FT 响应里的 GTK（groupkeys80211），WEP 密钥；
 每个受保护的帧依次试 WEP、单播（成对密钥）、组播（GTK），最后是 TDLS 对端直连（TPK），MIC / ICV 通过的才算解开。QoS 的 A-MSDU 位置位的帧拆成多个 MSDU。
 """
-import amsdu
-import decrypt80211 as dec
-import groupkeys80211 as gk
-import handshake80211 as hs
-import tdls80211
+from . import amsdu
+from . import decrypt as dec
+from . import groupkeys as gk
+from . import handshake as hs
+from . import tdls as tdls80211
 
 
 def decrypt_capture(frames, keys):

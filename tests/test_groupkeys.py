@@ -8,9 +8,9 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "tests"))
-import crypto80211  # noqa: E402
-import groupkeys80211 as gk  # noqa: E402
-import kdf80211  # noqa: E402
+from wifi80211 import crypto  # noqa: E402
+from wifi80211 import groupkeys as gk  # noqa: E402
+from wifi80211 import kdf  # noqa: E402
 from aead_build import A2, build, frame  # noqa: E402
 
 failures = []
@@ -63,20 +63,20 @@ print("== unwrap_key_data ==")
 KEK = bytes(range(32, 48))
 plain = GTK_KDE + PAD
 plain += bytes((-len(plain)) % 8)
-wrapped = kdf80211.aes_key_wrap(KEK, plain)
+wrapped = kdf.aes_key_wrap(KEK, plain)
 e = {"descriptor": 2, "key_info": {"version": 2}, "data": wrapped, "iv": bytes(16)}
 check(gk.unwrap_key_data(KEK, e) == plain, "版本 2：AES 密钥包装")
 check(gk.unwrap_key_data(bytes(16), e) is None, "KEK 不对：完整性校验失败返回 None")
 check(gk.unwrap_key_data(KEK, dict(e, key_info={"version": 0})) == plain, "版本 0（AKM 决定）：同样是 AES 密钥包装")
 check(gk.unwrap_key_data(KEK, dict(e, data=wrapped[:-1])) is None and gk.unwrap_key_data(KEK, dict(e, data=b"")) is None, "长度不是 8 的倍数 / 为空：None")
 iv = bytes(range(16))
-rc4_ct = crypto80211.rc4(iv + KEK, bytes(256) + plain)[256:]
+rc4_ct = crypto.rc4(iv + KEK, bytes(256) + plain)[256:]
 check(gk.unwrap_key_data(KEK, {"descriptor": 2, "key_info": {"version": 1}, "data": rc4_ct, "iv": iv}) == plain, "版本 1：RC4，密钥 IV ‖ KEK，丢弃前 256 字节密钥流")
 check(gk.unwrap_key_data(KEK, {"descriptor": 254, "key_info": {"version": 2}, "data": rc4_ct, "iv": iv}) == plain, "描述符 254（WPA1）：不看版本，一律 RC4")
 
 print("== group_ciphers ==")
-import frames80211 as fr  # noqa: E402
-import wifi_frame_parser as w  # noqa: E402
+from wifi80211 import frames as fr  # noqa: E402
+from wifi80211 import parser as w  # noqa: E402
 
 
 def rsn(group):
