@@ -79,5 +79,22 @@ with tempfile.TemporaryDirectory() as tmp:
         check(True, "报错，不使用该文件")
     check(not os.path.exists(os.path.join(dest, "a.pcap.gz")), "不留下校验失败的文件")
 
+print("== 额外文件放在并列的目录，不进抓包目录 ==")
+with tempfile.TemporaryDirectory() as tmp:
+    dest = os.path.join(tmp, "s")
+    path = os.path.join(tmp, "m.json")
+    with open(path, "w") as f:
+        json.dump({"wireshark_commit": "abc", "files": {"a.pcap.gz": hashlib.sha256(GOOD).hexdigest()},
+                   "extras": {"keys.tmpl": {"path": "test/config/80211_keys.tmpl", "sha256": hashlib.sha256(GOOD).hexdigest()}}}, f)
+    calls2 = []
+    check(fs.fetch(path, dest, opener_for(GOOD, calls2)) == (0, 2), "抓包 + 额外文件：下载 2 个")
+    check(calls2 == ["https://raw.githubusercontent.com/wireshark/wireshark/abc/test/captures/a.pcap.gz",
+                     "https://raw.githubusercontent.com/wireshark/wireshark/abc/test/config/80211_keys.tmpl"], "额外文件的地址用清单里的路径，不是 test/captures/")
+    check(os.listdir(dest) == ["a.pcap.gz"] and os.listdir(dest + "_extras") == ["keys.tmpl"], "抓包目录里只有抓包；额外文件在 samples_extras 里")
+    check(fs.fetch(path, dest, opener_for(GOOD, calls2)) == (2, 0) and len(calls2) == 2, "第二次：全部命中缓存")
+    with open(os.path.join(dest + "_extras", "keys.tmpl"), "ab") as f:
+        f.write(b"x")
+    check(fs.fetch(path, dest, opener_for(GOOD, calls2)) == (1, 1), "额外文件被改过：重下")
+
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)

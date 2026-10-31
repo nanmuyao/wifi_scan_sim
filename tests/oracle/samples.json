@@ -1,4 +1,14 @@
 {
+  "extras": {
+    "80211_keys.tmpl": {
+      "path": "test/config/80211_keys.tmpl",
+      "sha256": "ce00e6282fd6dcfd246521bd7b029fb3b674118d305c7dc9007fa535a0bc3f7a"
+    },
+    "suite_decryption.py": {
+      "path": "test/suite_decryption.py",
+      "sha256": "ef137bb142b69b039d9264d470003fee54b995b30755679e37837c32fb99575f"
+    }
+  },
   "files": {
     "owe-3-dh-groups.pcapng.gz": "8fe333c2870a86656d9928c0baa1be161eb991bae388afb70d53992d6324c720",
     "owe.pcapng.gz": "39cf8b7d3744d3f7bf43a3c395458401743779a19c1276d95364fec58cfa4309",

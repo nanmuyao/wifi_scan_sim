@@ -20,7 +20,9 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANIFEST = os.path.join(HERE, "samples.json")
 SAMPLE_DIR = os.path.join(HERE, "samples")
+EXTRAS_DIR = SAMPLE_DIR + "_extras"
 URL = "https://raw.githubusercontent.com/wireshark/wireshark/%s/test/captures/%s"
+EXTRA_URL = "https://raw.githubusercontent.com/wireshark/wireshark/%s/%s"
 
 
 def sha256(path):
@@ -35,16 +37,21 @@ def fetch(manifest=MANIFEST, dest=SAMPLE_DIR, opener=urllib.request.urlopen):
     """保证 manifest 里的文件都在 dest 里且校验通过，返回 (已有, 新下载) 数量。失败抛 RuntimeError。"""
     with open(manifest, encoding="utf-8") as f:
         m = json.load(f)
+    extras_dir = dest.rstrip(os.sep) + "_extras"      # 不放进抓包目录：很多测试把那个目录里的每个文件都当抓包读
     os.makedirs(dest, exist_ok=True)
+    os.makedirs(extras_dir, exist_ok=True)
     have = got = 0
-    for name, want in sorted(m["files"].items()):
-        path = os.path.join(dest, name)
+    # 抓包文件 + 其它固定到同一提交的文件（Wireshark 测试用的密钥表、含期望密钥值的测试脚本）
+    todo = [(dest, name, want, URL % (m["wireshark_commit"], name)) for name, want in sorted(m["files"].items())]
+    todo += [(extras_dir, name, e["sha256"], EXTRA_URL % (m["wireshark_commit"], e["path"])) for name, e in sorted(m.get("extras", {}).items())]
+    for where, name, want, url in todo:
+        path = os.path.join(where, name)
         if os.path.exists(path):
             if sha256(path) == want:
                 have += 1
                 continue
             os.remove(path)          # 校验不过的旧文件：删掉重下
-        data = opener(URL % (m["wireshark_commit"], name)).read()
+        data = opener(url).read()
         if hashlib.sha256(data).hexdigest() != want:
             raise RuntimeError("%s: sha256 与 samples.json 不符，不使用" % name)
         with open(path, "wb") as f:
