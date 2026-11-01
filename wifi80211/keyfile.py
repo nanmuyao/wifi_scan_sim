@@ -8,8 +8,10 @@
   "tk","十六进制"                                  直接给成对临时密钥 TK（16 / 32 字节）
 解析出来是 [(类型, 值)]，就是 pipeline.decrypt_capture 的 keys 参数。读错的行只报行号和类型，不把值写进错误信息。
 """
+import logging
 import re
 
+log = logging.getLogger(__name__)
 TYPES = ("wpa-pwd", "wpa-psk", "msk", "wep", "tk")
 HEX_TYPES = ("wpa-psk", "msk", "wep", "tk")
 LINE = re.compile(r'^"([^"]+)"\s*,\s*"([^"]*)"\s*$')
@@ -40,7 +42,9 @@ def parse_text(text):
 
 def parse(path):
     with open(path, encoding="utf-8") as f:
-        return parse_text(f.read())
+        keys = parse_text(f.read())
+    log.info("密钥文件 %s：%s", path, "、".join("%s %d 把" % kv for kv in summary(keys).items()) if keys else "没有密钥")        # 只记类型和个数，不记值
+    return keys
 
 
 def summary(keys):

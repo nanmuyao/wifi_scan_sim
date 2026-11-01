@@ -7,10 +7,14 @@ CCMP / GCMP 帧体 = 8 字节头 ‖ 密文 ‖ MIC（CCMP-128 8 字节，CCMP-2
   nonce（CCMP，13 字节）：标志(1：数据帧是 QoS 的 TID、管理帧是 0x10) ‖ A2(6) ‖ PN(6，高位在前)；GCMP 的 IV（12 字节）：A2 ‖ PN（高位在前）
   AAD：帧控制（数据帧的子类型 b4-b6、重试、省电、更多数据清零；受保护位保留；管理帧的子类型整个保留）‖ A1 ‖ A2 ‖ A3 ‖ 序号控制（只留分片号）‖ [A4] ‖ [QoS 控制，只留 TID]
 """
+import logging
 import struct
 
 from . import crypto as c
 from . import kdf
+from . import logs
+
+log = logging.getLogger(__name__)
 
 MIC_LEN = {"CCMP-128": 8, "CCMP-256": 16, "GCMP-128": 16, "GCMP-256": 16}
 
@@ -112,15 +116,46 @@ def decrypt_frame(handshakes, frame, mld=None):
         return None
     link = (lambda a: mld.get(a, a)) if mld else (lambda a: a)        # 多链路：帧头里是链路地址，握手记的是 MLD 地址
     pair = {link(h["addr1"]), link(h["addr2"])}
+    tr = log.isEnabledFor(logs.TRACE)
     for hs in sorted((x for x in handshakes if {x.ap, x.sta} == pair and x.frames["m2"] < frame.n and x.cipher in SUPPORTED),
                      key=lambda x: -x.frames["m2"]):
         try:
             pt, ok = decrypt_any(hs.cipher, hs.tk, frame, mld)
         except ValueError:
+            if tr:
+                logs.trace(log, "第 %d 帧：用 M2=帧 %d 的握手试，帧体太短", frame.n, hs.frames["m2"])
             continue
         if ok:
+            if tr:
+                logs.trace(log, "第 %d 帧：用 M2=帧 %d 的握手解开（%s）", frame.n, hs.frames["m2"], hs.cipher)
             return hs, pt
+        if tr:
+            logs.trace(log, "第 %d 帧：用 M2=帧 %d 的握手试（%s），MIC 不对", frame.n, hs.frames["m2"], hs.cipher)
     return None
+
+
+# 单播受保护数据帧没被 decrypt_frame 解开的原因（why_not 的返回值）
+WHY = {"no_handshake": "抓包里没有这对 (AP, 设备) 的握手", "before_handshake": "帧在这对设备的握手（M2）之前，当时用的密钥没抓到",
+       "cipher_unsupported": "这对设备的成对密码套件不支持", "too_short": "帧体太短，装不下 CCMP / GCMP 头和 MIC", "mic_failed": "有握手但 MIC 不对（多半是重新握手换了密钥而没抓到，或帧损坏）"}
+
+
+def why_not(handshakes, frame, mld=None):
+    """诊断用（不在热路径上）：一个受保护的单播数据帧没被 decrypt_frame 解开，原因的代码，见 WHY。"""
+    h = frame.h
+    link = (lambda a: mld.get(a, a)) if mld else (lambda a: a)
+    pair = {link(h["addr1"]), link(h["addr2"])}
+    same = [x for x in handshakes if {x.ap, x.sta} == pair]
+    if not same:
+        return "no_handshake"
+    before = [x for x in same if x.frames["m2"] < frame.n]
+    if not before:
+        return "before_handshake"
+    usable = [x for x in before if x.cipher in SUPPORTED]
+    if not usable:
+        return "cipher_unsupported"
+    if all(len(frame.body) < 8 + (8 if x.cipher == "TKIP" else MIC_LEN[x.cipher]) for x in usable):
+        return "too_short"
+    return "mic_failed"
 
 
 def wep_keys(keys):

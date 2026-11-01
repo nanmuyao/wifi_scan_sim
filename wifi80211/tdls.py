@@ -13,11 +13,14 @@ TDLS（直连链路建立，802.11z）：两个站点经过 AP 交换三条 TDLS
 验证：FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(1：Response 2、Confirm 3) ‖ 链路标识元素 ‖ RSNE ‖ 超时间隔元素 ‖ FTE（MIC 清零）)（元素都带 ID 和长度）。
 """
 import hashlib
+import logging
 from collections import namedtuple
 
 from . import decrypt as dec
 from . import ie
 from . import kdf
+
+log = logging.getLogger(__name__)
 
 ETHERTYPE = 0x890D
 SETUP_REQUEST, SETUP_RESPONSE, SETUP_CONFIRM = 0, 1, 2
@@ -110,8 +113,12 @@ def track(msdus):
         conf = confs.get(key)
         ok_resp = resp["rsne_raw"] is not None and resp["timeout_raw"] is not None and mic_of(kck, SETUP_RESPONSE, resp) == resp["fte"]["mic"]
         ok_conf = conf is not None and conf[1]["rsne_raw"] is not None and conf[1]["timeout_raw"] is not None and mic_of(kck, SETUP_CONFIRM, conf[1]) == conf[1]["fte"]["mic"]
+        log.debug("TDLS：发起方 %s 与对端 %s（BSSID %s）：Response 的 MIC %s，Confirm %s", initiator, responder, bssid, "吻合" if ok_resp else "对不上",
+                  "缺失" if conf is None else ("吻合" if ok_conf else "对不上"))
         if ok_resp or ok_conf:
             out.append(TdlsKey(initiator, responder, bssid, kck, tk, "CCMP-128", {"response": n_resp, "confirm": conf[0] if conf else None, "response_mic_ok": ok_resp, "confirm_mic_ok": ok_conf}))
+    if resps:
+        log.info("TDLS：看到 %d 组建立帧，%d 组 MIC 验证通过", len(resps), len(out))
     return out
 
 
