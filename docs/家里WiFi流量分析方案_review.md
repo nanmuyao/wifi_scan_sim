@@ -102,7 +102,7 @@ tcpdump / tshark 抓包 → all.pcap（先让一台设备断开重连，抓到�
 
 ## 七、与 wifi_scan_sim 的关系与建议顺序
 
-1. **已完成（零成本、纯软件）**：阶段 A–H，全套 71 个测试通过，`v0.2.0` 已打 tag。详见 `docs/技术路线.md` 和 `docs/wifi_scan_sim_roadmap_v3.md`。
+1. **已完成（零成本、纯软件）**：阶段 A–H，全套 78 个测试通过，`v0.3.0` 已打 tag。详见 `docs/技术路线.md` 和 `docs/wifi_scan_sim_roadmap_v3.md`。
 2. **下一步（当前主线，路线 B）**：按 `docs/路线B实施方案.md`：先确认网络是 WPA2、记下信道和链路速率，买 2×2 的监听网卡，用 Mac 上的 Linux 虚拟机抓第一份真实数据，用 `python3 -m wifi80211.report` 出报告；报告里没认出的域名（`apps.unmatched`）补进自己的规则。
 3. **之后**：按需要做路线 A，拿到应用级和流量级的完整统计。
 
