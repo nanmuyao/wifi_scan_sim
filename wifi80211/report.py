@@ -192,7 +192,7 @@ def logs_setup(argv):
         logs.setup(a.log_level, None, a.redact)
         log.warning("日志文件写不了（%s），只输出到屏幕", e)
         path = None
-    inputs = [x for x in argv if not x.startswith("-") and os.path.exists(x)]
+    inputs = [x for x in argv if not x.startswith("-") and os.path.exists(x) and x != path]                  # 日志文件自己不是输入
     logs.run_header(log, argv, inputs)
     if path:
         print("日志文件：%s" % path, file=sys.stderr)
