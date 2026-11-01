@@ -139,6 +139,7 @@ RENDER = {"table": render_table, "json": render_json, "csv": render_csv}
 
 log = logging.getLogger("wifi80211.report")                      # 不用 __name__：python -m 运行时它是 __main__，就不在 wifi80211 的日志树里了
 EXIT_INTERNAL = 70
+FILE_ONLY = {"file_only": True}                                          # 已经打印给人看的提示：日志文件里记一份，屏幕上不再重复
 
 
 def main(argv=None):
@@ -158,7 +159,7 @@ def main(argv=None):
 
 def note(level, msg):
     """给人看的提示：写进日志，也打到屏幕（stderr）。"""
-    log.log(level, "%s", msg)
+    log.log(level, "%s", msg, extra=FILE_ONLY)
     print(msg, file=sys.stderr)
 
 
@@ -203,7 +204,7 @@ def _main(argv):
         a = p.parse_args(argv)
     except SystemExit as e:
         return EXIT_USAGE if e.code else 0
-    err = lambda m: (log.error("%s", m), print("错误：" + m, file=sys.stderr), EXIT_USAGE)[2]               # noqa: E731
+    err = lambda m: (log.error("%s", m, extra=FILE_ONLY), print("错误：" + m, file=sys.stderr), EXIT_USAGE)[2]               # noqa: E731
     if a.gap <= 0 or a.unmatched < 0 or a.min_events < 0 or (a.top is not None and a.top < 0):
         return err("--gap 要大于 0，--unmatched、--min-events 和 --top 不能是负数")
     mac = None

@@ -48,6 +48,16 @@ logs.setup("error", None, stream=buf)
 check(len([h for h in logging.getLogger("wifi80211").handlers if getattr(h, "_wifi80211", False)]) == 1, "重复 setup：旧的处理器被去掉，不会重复输出（没有文件时只剩屏幕）")
 check(logging.getLogger("wifi80211").propagate is False, "不向根日志传播（不会被别的库的配置重复输出）")
 
+buf = io.StringIO()
+path = os.path.join(tmp, "f.log")
+logs.setup("warning", path, stream=buf)
+log.warning("只进文件 %s", "x", extra={"file_only": True})
+log.warning("屏幕和文件都有")
+for h in logging.getLogger("wifi80211").handlers:
+    h.flush()
+text = open(path, encoding="utf-8").read()
+check("只进文件" in text and "只进文件" not in buf.getvalue() and "屏幕和文件都有" in buf.getvalue() and "屏幕和文件都有" in text, "file_only 的记录只进日志文件，屏幕上不重复（给人看的提示已经另外打印过）")
+
 print("== 兜底遮蔽与 --redact ==")
 buf = io.StringIO()
 path = os.path.join(tmp, "b.log")
@@ -106,6 +116,7 @@ check(rc == 0 and "--log-level" in o and "--redact" in o, "--help 列出日志�
 rc, o, e = cli("/nonexistent.pcap", "--keys", "/nonexistent.txt", cwd=work)
 logs_found = [x for x in os.listdir(work) if x.startswith("wifi80211-") and x.endswith(".log")]
 check(rc == 2 and len(logs_found) >= 1 and "日志文件：" in e, "出错时也写了日志文件，并告诉你路径（出错的时候最需要它）")
+check(e.count("读不了密钥文件") == 1, "错误提示在屏幕上只出现一次")
 text = open(os.path.join(work, logs_found[0]), encoding="utf-8").read()
 check("wifi80211 0.1.0" in text and "参数：/nonexistent.pcap" in text, "日志里有运行头和参数")
 work2 = tempfile.mkdtemp()

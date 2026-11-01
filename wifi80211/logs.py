@@ -31,6 +31,13 @@ def trace(logger, msg, *args):
         logger.log(TRACE, msg, *args)
 
 
+class ScreenFilter(logging.Filter):
+    """屏幕处理器用：带 file_only 标记的记录只进日志文件（给人看的提示已经另外打印过了，不重复）。"""
+
+    def filter(self, record):
+        return not getattr(record, "file_only", False)
+
+
 class SecretFilter(logging.Filter):
     """兜底：把 16 字节（32 个十六进制字符）以上的十六进制串遮掉。写日志的代码本来就不该带密钥，这里防的是疏忽。"""
 
@@ -79,7 +86,9 @@ def setup(level="info", logfile=None, redact=False, stream=None):
     handlers = [(logging.StreamHandler(stream or sys.stderr), lvl, "%(levelname)s %(message)s")]
     if logfile:
         handlers.append((logging.FileHandler(logfile, encoding="utf-8"), TRACE if lvl == TRACE else logging.DEBUG, "%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
-    for h, hl, fmt in handlers:
+    for i, (h, hl, fmt) in enumerate(handlers):
+        if i == 0:
+            h.addFilter(ScreenFilter())
         h.setLevel(hl)
         h.setFormatter(logging.Formatter(fmt))
         for f in filters:
