@@ -9,6 +9,9 @@ TCP 流重组：把同一个方向上乱序、重传、重叠的段按序号拼�
   - 校验和不对的段丢掉（解密或抓包错误产生的垃圾不进流）。
   - 遇到空缺就停，data() 只返回从起点开始连续的那一段；gap 告诉后面还有没有数据。
 """
+import logging
+
+log = logging.getLogger(__name__)
 SYN, ACK = 0x02, 0x10
 MAX_BYTES = 1 << 20                                                    # 每个方向最多存这么多负载字节，防止异常流吃光内存
 
@@ -28,9 +31,11 @@ class Direction:
         self.stored = 0
         self.packets = 0
         self.first_frame = None
+        self.bad = 0                                                   # 因为校验和不对而丢掉的段数
 
     def add(self, tcp, frame=None):
         if tcp["checksum_ok"] is False:
+            self.bad += 1
             return
         if self.ref is None:
             self.ref = tcp["seq"]
@@ -82,6 +87,20 @@ class Direction:
         got = first[0][1] if first and first[0][0] == "data" else b""
         return got if limit is None else got[:limit]
 
+    def missing_bytes(self):
+        """缺口一共缺多少字节（不拼接数据，比 pieces() 省内存）。"""
+        pos, total = self.start, 0
+        if pos is None:
+            return 0
+        for off in sorted(self.segs):
+            end = off + len(self.segs[off])
+            if end <= pos:
+                continue
+            if off > pos:
+                total += off - pos
+            pos = end
+        return total
+
     @property
     def gap(self):
         """连续部分之后是否还有不连续的段（中间丢了包 / 没抓到）。"""
@@ -97,6 +116,33 @@ class Flows:
     def add(self, src, dst, tcp, frame=None):
         key = (src, tcp["sport"], dst, tcp["dport"])
         self.dirs.setdefault(key, Direction()).add(tcp, frame)
+
+    def summary(self):
+        """-> {"connections", "directions", "with_data", "with_gap", "missing_bytes", "no_syn", "bad_checksum"}：诊断用的计数。"""
+        s = dict.fromkeys(("with_data", "with_gap", "missing_bytes", "no_syn", "bad_checksum"), 0)
+        s["connections"], s["directions"] = len(self.pairs()), len(self.dirs)
+        for d in self.dirs.values():
+            s["bad_checksum"] += d.bad
+            if d.segs:
+                s["with_data"] += 1
+                s["no_syn"] += d.syn_at is None
+                m = d.missing_bytes()
+                s["with_gap"] += m > 0
+                s["missing_bytes"] += m
+        return s
+
+    def log_summary(self):
+        """TCP 重组的阶段小结：连接数、有缺口的方向和缺的字节数、没抓到 SYN 的方向、因校验和丢掉的段。"""
+        if not self.dirs:
+            return
+        s = self.summary()
+        log.info("TCP：%d 条连接（%d 个方向，%d 个方向有数据）", s["connections"], s["directions"], s["with_data"])
+        if s["with_gap"]:
+            log.warning("TCP：%d 个方向中途缺包，一共缺 %d 字节（抓包机漏抓了包；缺口前面的数据仍可用，缺口之后的 ClientHello / 请求可能读不到）", s["with_gap"], s["missing_bytes"])
+        if s["no_syn"]:
+            log.info("TCP：%d 个方向没抓到 SYN（抓包从连接中途开始，起点取见到的最小序号）", s["no_syn"])
+        if s["bad_checksum"]:
+            log.warning("TCP：%d 个段因校验和不对被丢掉（多半是解密不对，或抓包机的校验和卸载造成的假错误）", s["bad_checksum"])
 
     def pairs(self):
         """每条连接一项：{(a, 端口, b, 端口): {...}}，键取先出现的方向；值含两个方向对象和 client（发 SYN 且没带 ACK 的一方的键；没抓到握手就按先出现的方向）。"""

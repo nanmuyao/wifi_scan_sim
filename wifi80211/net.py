@@ -6,9 +6,13 @@
 只有在解密完全正确时才会吻合（密文解错一个比特，校验和就对不上），这是对解密结果的独立证明，不依赖 tshark。
 每个 parse_* 对结构不对（太短、版本不对）返回 None，不抛异常。
 """
+import logging
 import struct
 
 from . import dns as dns80211
+from . import logs
+
+log = logging.getLogger(__name__)
 
 LLC_SNAP = b"\xaa\xaa\x03"
 LLC_STP = b"\x42\x42\x03"
@@ -176,6 +180,7 @@ def describe(msdu):
         return {"layers": ["llc", "stp"], "ethertype": None, "checks": [], "stp": bytes(msdu[3:])}
     s = parse_snap(msdu)
     if s is None:
+        logs.trace(log, "MSDU 不是 LLC/SNAP（%d 字节，开头 %s）", len(msdu), bytes(msdu[:8]).hex())
         return None
     out = {"layers": ["snap"], "ethertype": s["ethertype"], "checks": []}
     ip = None

@@ -16,11 +16,15 @@ Linux cooked 头里没有目的 MAC：设备 MAC 只能取「别人发来的、�
 
 重要：设备的 MAC 只有在局域网一侧才看得到。在路由器后面（WAN 一侧）、或做过 NAT 之后抓，所有包的 MAC 都是路由器的，设备分不开。
 """
+import collections
 import ipaddress
+import logging
 import struct
 from collections import namedtuple
 
 from . import activity, capture
+
+log = logging.getLogger(__name__)
 
 ETHERNET, LINUX_SLL, LINUX_SLL2 = 1, 113, 276
 DOT11_LINKTYPES = (105, 127)
@@ -77,11 +81,22 @@ def parse_packet(n, pkt):
 
 def iter_packets(cap):
     """cap：capture.read_capture 的结果 -> 所有认得的包（包号照抓包里的顺序数，不认得的也占号）。"""
-    out = []
+    out, types, skipped, no_mac = [], collections.Counter(), 0, 0
     for n, p in enumerate(cap.packets, 1):
+        types[p.linktype] += 1
         q = parse_packet(n, p)
-        if q is not None:
+        if q is None:
+            skipped += 1
+        else:
+            no_mac += q.cooked and q.src is None
             out.append(q)
+    if cap.packets:
+        names = {ETHERNET: "以太网", LINUX_SLL: "Linux cooked v1", LINUX_SLL2: "Linux cooked v2"}
+        log.info("读到 %d 个包；链路类型：%s", len(cap.packets), "，".join("%s %d" % (names.get(k, "类型 %d" % k), v) for k, v in sorted(types.items())))
+        if skipped:
+            log.warning("%d 个包太短或链路类型不认得，跳过了", skipped)
+        if no_mac:
+            log.warning("%d 个 cooked 包的链路层地址不是 6 字节以太网 MAC（接口不是以太网？），认不出设备；请在局域网一侧的以太网接口上抓（tcpdump -i eth0），不要用 -i any", no_mac)
     return out
 
 
@@ -148,7 +163,46 @@ def analyze(packets):
     """已解析的包 -> 已 finish 的 activity.Collector（.events、.flow_stats、.names、.answers）。"""
     routers, ip_mac = learn(packets)
     c = activity.Collector()
+    dirs, why, seen = collections.Counter(), collections.Counter(), set()
     for p in packets:
         st, up = classify(p, routers, ip_mac)
+        if st is None:
+            why[_why_none(p, up)] += 1
+        else:
+            seen.add(st)
+        dirs["未知" if up is None else "上行" if up else "下行"] += 1
         c.feed(p.n, p.ts, st, [LLC_SNAP + struct.pack(">H", p.ethertype) + p.l3], up)
+    log.info("认出 %d 台设备；路由器 MAC 学到 %d 个（%s）；cooked 的 IP -> MAC 表 %d 项；方向判断：%s", len(seen), len(routers), "、".join(sorted(routers)) or "没有", len(ip_mac), "，".join("%s %d" % kv for kv in sorted(dirs.items())) or "无包")
+    if sum(why.values()):
+        log.info("%d 个包认不出设备：%s", sum(why.values()), "；".join("%s %d" % kv for kv in why.most_common()))
+    pub = why[WHY_PUBLIC]
+    ip_total = len(packets) - why[WHY_NOT_IP]
+    if ip_total >= 10 and pub / ip_total > 0.5:
+        log.warning("%d%% 的 IP 包两端都是公网地址：抓的多半是路由器 WAN 一侧或 NAT 之后（局域网地址被换成了路由器的公网地址），设备分不开，报告里不会有设备。请在局域网一侧抓（交换机镜像口、网关的内网接口）",
+                    round(100 * pub / ip_total))
+    elif not routers and any(not p.cooked and addresses(p) for p in packets):
+        log.warning("没学到路由器的 MAC：抓包里看不到「局域网 <-> 公网」的往来，上行 / 下行只能按两端是否局域网地址粗判（可能只抓到局域网内部的流量）")
+    elif len(routers) > 1:
+        log.info("学到 %d 个路由器 MAC（可能是多个网关 / 多个接口）", len(routers))
+    if packets and not seen:
+        log.warning("一台设备也没认出来：见上面「认不出设备」的原因")
     return c.finish()
+
+
+WHY_NOT_IP = "不是 IP 包（ARP、LLDP、STP 等）"
+WHY_PUBLIC = "两端都是公网 / 组播 / 广播地址"
+
+
+def _why_none(p, up):
+    """这个包认不出设备的原因（诊断用）。"""
+    ad = addresses(p)
+    if ad is None:
+        return WHY_NOT_IP
+    s, d = scope(ad[0]), scope(ad[1])
+    if p.cooked and up is False:
+        return "cooked 抓包里目的 IP 不在 IP -> MAC 表里（这台设备没发过包）"
+    if p.cooked and up is True:
+        return "cooked 抓包里本机发出的包没有源 MAC"
+    if s == "pub" and d == "lan":
+        return "下行包的目的 MAC 是路由器：设备分不开（在路由器的 WAN 一侧或 NAT 之后抓的？）"
+    return WHY_PUBLIC

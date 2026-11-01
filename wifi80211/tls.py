@@ -84,6 +84,20 @@ def _extension(res, etype, body):
         res["supported_versions"] = [r.u16() for _ in range(n // 2)]
 
 
+def diagnose(data):
+    """data 不是可读的 ClientHello 时说明原因（诊断用，只看开头几个字节）：返回 (原因代号, 中文说明)。
+    原因：empty（没有数据）、not_tls（开头不是 TLS 握手记录）、not_hello（TLS 握手但不是 ClientHello）、truncated（ClientHello 在读到 SNI 之前就没数据了）、bad（结构不对）。"""
+    if not data:
+        return "empty", "该方向没有可用数据"
+    if len(data) < 6 or data[0] != HANDSHAKE or data[1] != 3:
+        return "not_tls", "开头不是 TLS 握手记录"
+    if data[5] != CLIENT_HELLO:
+        return "not_hello", "TLS 握手消息类型是 %d，不是 ClientHello" % data[5]
+    if parse_client_hello(data) is None:
+        return "truncated", "ClientHello 在读到 SNI 之前就没有数据了（被截断或缺口）"
+    return "ok", "可读"
+
+
 def parse_client_hello(stream):
     """-> {"record_version", "version"（legacy_version）, "supported_versions", "tls13", "sni"[...], "alpn"[...], "cipher_suites"（个数）,
     "extensions"[类型...], "ech", "esni", "truncated"}，或 None。sni 是 host_name 条目（通常 1 个，没有则空表）。"""

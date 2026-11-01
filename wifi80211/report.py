@@ -83,6 +83,20 @@ def attach_traffic(rep, agg, top=None):
     return rep
 
 
+def log_result(rep, stats, rules, events, flow_list):
+    """日志的收尾：应用归类、流量的小结，再加一段自成一体的「结果」——日志文件拉到最后就能看到这次跑出了什么。"""
+    labelled, total = apps.log_coverage(rules, events)
+    traffic.log_summary(flow_list)
+    up = sum(f["bytes_up"] for f in flow_list)
+    down = sum(f["bytes_down"] for f in flow_list)
+    names = {r["app"] for d in rep["devices"] for r in d["apps"]}
+    log.info("结果：模式 %s，帧 / 包 %d 个%s；设备 %d 台；事件 %d 个；认出 %d 个应用；上行 %s、下行 %s；没规则的事件占 %s",
+             stats.get("mode"), stats.get("frames", 0), "，受保护 %d 个解开 %d 个" % (stats["protected"], stats["decrypted"]) if stats.get("mode") == "dot11" else "",
+             len(rep["devices"]), len(events), len(names), traffic.human(up), traffic.human(down), "%.0f%%" % (100 * (total - labelled) / total) if total else "-")
+    if not rep["devices"]:
+        log.warning("报告里没有设备：事件为 0，或者被 --device / --min-events 滤掉了")
+
+
 def render_table(rep, stats):
     if stats.get("mode") == "plain":
         out = ["抓包：%d 个包（明文，无需解密）；设备 %d 台。" % (stats["frames"], len(rep["devices"]))]
@@ -253,7 +267,9 @@ def _main(argv):
             note(logging.WARNING, "提示：抓包里没有受保护的数据帧（没抓到数据，或者是开放网络——开放网络的明文暂不支持）。")
         result = activity.analyze(fr, dec)
     rep = build(result.events, rules, a.gap, mac, a.min_events, a.unmatched)
-    attach_traffic(rep, traffic.aggregate(rules, traffic.flows(result)), a.top)
+    flow_list = traffic.flows(result)
+    attach_traffic(rep, traffic.aggregate(rules, flow_list), a.top)
+    log_result(rep, stats, rules, result.events, flow_list)
     sys.stdout.write(RENDER[a.format](rep, stats))
     if a.format == "csv":
         print(LIMITS, file=sys.stderr)
