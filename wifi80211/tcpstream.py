@@ -32,6 +32,7 @@ class Direction:
         self.packets = 0
         self.first_frame = None
         self.bad = 0                                                   # 因为校验和不对而丢掉的段数
+        self.full = False                                              # 存满了 MAX_BYTES：之后的段一律不收（只收一部分会在中间留下假缺口，被当成丢包）
 
     def add(self, tcp, frame=None):
         if tcp["checksum_ok"] is False:
@@ -47,7 +48,10 @@ class Direction:
             self.opener = self.opener or not tcp["flags"] & ACK
             off += 1                                                   # SYN 占一个序号，数据（Fast Open）从下一个开始
         data = tcp["payload"]
-        if not data or self.stored + len(data) > MAX_BYTES:
+        if not data or self.full:
+            return
+        if self.stored + len(data) > MAX_BYTES:
+            self.full = True                                           # 真实抓包里的大下载：存下来的约 1 MiB 之后若再挑小段收，会被当成「缺 N 字节」，其实一个包也没丢
             return
         old = self.segs.get(off)
         if old is None or len(data) > len(old):

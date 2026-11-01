@@ -104,6 +104,23 @@ ts.MAX_BYTES = 10
 d = one([seg(1000, flags="S"), seg(1001, b"a" * 8), seg(1009, b"b" * 8)])
 ts.MAX_BYTES = saved
 check(d.data() == b"a" * 8, "超过每方向的存储上限：后面的段不再收")
+ts.MAX_BYTES = 10
+d = one([seg(1000, flags="S"), seg(1001, b"a" * 8), seg(1009, b"b" * 8), seg(1017, b"c" * 2), seg(1019, b"d")])
+ts.MAX_BYTES = saved
+check(d.data() == b"a" * 8 and not d.gap and d.missing_bytes() == 0 and d.full, "存满之后更小的段也不再收：不会在中间留下假缺口（原先 c 会挤进来，被当成缺 8 字节）")
+ts.MAX_BYTES = 10
+f = feed([seg(1000, flags="S"), seg(1001, b"a" * 8), seg(1009, b"b" * 8), seg(1017, b"c" * 2)])
+ts.MAX_BYTES = saved
+s = f.summary()
+check(s["with_gap"] == 0 and s["missing_bytes"] == 0, "诊断计数：存满的方向不算「中途缺包」")
+ts.MAX_BYTES = 10
+d = one([seg(1000, flags="S"), seg(1001, b"a" * 8), seg(1009, b"b" * 8), seg(1001, b"a" * 8)])
+ts.MAX_BYTES = saved
+check(d.data() == b"a" * 8 and d.packets == 4, "存满之后重传前面的段：内容不变，包数照数（4 个：SYN、a、b、重传的 a）")
+ts.MAX_BYTES = 10
+d = one([seg(1000, flags="S"), seg(1001, b"a" * 4), seg(1009, b"b" * 4)])
+ts.MAX_BYTES = saved
+check(d.data() == b"a" * 4 and d.gap and d.missing_bytes() == 4 and not d.full, "没存满时真正的缺口照旧报告（缺 4 字节）")
 
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)
