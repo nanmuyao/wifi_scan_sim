@@ -1,0 +1,9 @@
+{"format": 1,
+ "note": "公开的加密 DNS（DoH / DoT）服务器域名。设备连上这些域名说明它的 DNS 查询被加密了，我们看不到它查了什么。手写，每一项的 source 是服务商自己的说明页（2026-11-02 取到并核对过域名）；没核对到的服务商没有收录（如 DNSPod、OpenDNS）。",
+ "apps": [
+  {"app": "加密 DNS：Google Public DNS", "category": "加密 DNS", "full": ["dns.google"], "source": "https://developers.google.com/speed/public-dns/docs/doh"},
+  {"app": "加密 DNS：Cloudflare 1.1.1.1", "category": "加密 DNS", "full": ["cloudflare-dns.com", "one.one.one.one"], "source": "https://developers.cloudflare.com/1.1.1.1/encryption/dns-over-https/"},
+  {"app": "加密 DNS：Quad9", "category": "加密 DNS", "full": ["dns.quad9.net"], "source": "https://docs.quad9.net/services/"},
+  {"app": "加密 DNS：AdGuard DNS", "category": "加密 DNS", "full": ["dns.adguard-dns.com"], "source": "https://adguard-dns.io/en/public-dns.html"},
+  {"app": "加密 DNS：阿里公共 DNS", "category": "加密 DNS", "full": ["dns.alidns.com"], "source": "https://www.alidns.com/"}
+ ]}

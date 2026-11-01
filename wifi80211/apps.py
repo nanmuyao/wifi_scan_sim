@@ -15,6 +15,7 @@ import os
 from . import activity
 
 DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules", "apps.json")
+ENCRYPTED_DNS = os.path.join(os.path.dirname(DEFAULT), "encrypted_dns.json")      # 手写的加密 DNS 服务器域名（完全匹配，优先于后缀规则：dns.google 归「加密 DNS」而不是 Google）
 SKIP_KINDS = ("mdns",)                                                   # 局域网服务发现的名字不是「访问了什么」
 
 
@@ -59,15 +60,16 @@ def _norm(name):
     return name.strip().lower().rstrip(".") if isinstance(name, str) else ""
 
 
-def load(*extra_paths, bundled=DEFAULT):
-    """加载自带规则；extra_paths 里自己的规则优先于自带的（同一个域名以自己的为准）。bundled=None 只用自己的。"""
+def load(*extra_paths, bundled=DEFAULT, encrypted_dns=ENCRYPTED_DNS):
+    """加载规则：自己的（extra_paths）优先，其次是加密 DNS 服务器，最后是自带的 apps.json（加密 DNS 都是完全匹配，本来就优先于后缀规则，先后顺序不影响结果）。bundled=None 不用自带的，encrypted_dns=None 不用加密 DNS 那份。"""
     r = Rules()
     for p in extra_paths:
         with open(p, encoding="utf-8") as f:
             r.add(json.load(f))
-    if bundled:
-        with open(bundled, encoding="utf-8") as f:
-            r.add(json.load(f))
+    for p in (encrypted_dns, bundled):
+        if p:
+            with open(p, encoding="utf-8") as f:
+                r.add(json.load(f))
     return r
 
 

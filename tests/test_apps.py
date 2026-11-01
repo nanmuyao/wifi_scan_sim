@@ -116,6 +116,12 @@ spots = {"v26-web.douyinvod.com": "抖音", "www.tiktok.com": "TikTok", "rr3---s
          "occ-0-1.nflxvideo.net": "Netflix", "www.baidu.com": "百度", "static.xx.fbcdn.net": "Facebook", "t.me": "Telegram", "a.example.invalid": None, "en.wikipedia.org": None}
 got = {k: (real.label(k) or {}).get("app") for k in spots}
 check(got == spots, "几个常见域名的归属（%s）" % {k: v for k, v in got.items() if v != spots[k]})
+enc = {k: (real.label(k) or {}).get("category") for k in ("dns.google", "cloudflare-dns.com", "one.one.one.one", "dns.quad9.net", "dns.adguard-dns.com", "dns.alidns.com", "www.google.com", "x.dns.google")}
+check(enc == {"dns.google": "加密 DNS", "cloudflare-dns.com": "加密 DNS", "one.one.one.one": "加密 DNS", "dns.quad9.net": "加密 DNS", "dns.adguard-dns.com": "加密 DNS", "dns.alidns.com": "加密 DNS", "www.google.com": "系统与云", "x.dns.google": "系统与云"},
+      "加密 DNS 服务器域名归「加密 DNS」（完全匹配优先于 Google 的后缀规则）；只匹配完全相同的名字，别的 google 域名不受影响")
+check(apps.load(bundled=None).label("dns.google") is not None and apps.load(bundled=None, encrypted_dns=None).label("dns.google") is None, "encrypted_dns 可以单独关掉")
+ed = json.load(open(apps.ENCRYPTED_DNS, encoding="utf-8"))
+check(all(a.get("source", "").startswith("https://") and a["category"] == "加密 DNS" and not a.get("suffix") for a in ed["apps"]) and len(ed["apps"]) == 5, "加密 DNS 文件：每一项有来源网址，只有完全匹配")
 check(real.label("www.youtube.com")["app"] == "YouTube" and real.label("www.google.com")["app"] == "Google", "youtube 排在 google 前面：YouTube 的域名不被 Google 的清单抢走")
 
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
