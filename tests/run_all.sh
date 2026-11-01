@@ -35,6 +35,8 @@ run "SAE / OWE 对照 tshark（commit / confirm / DH 参数，曲线上的点）
 run "解密后的内容（LLC/SNAP、ARP、IP、UDP、TCP、ICMP、DHCP 与校验和，scapy 独立构造）" python3 tests/test_net.py
 run "解密流水线接线（WEP 合成帧、A-MSDU）" python3 tests/test_pipeline.py
 run "解密后的内容对照 tshark（1301 个数据帧逐层，校验和全部吻合）" python3 tests/oracle/test_net_diff.py
+run "DNS / mDNS 报文（名字压缩、记录类型、坏报文，scapy 独立构造）" python3 tests/test_dns.py
+run "DNS / mDNS 对照 tshark（3 个样例 40 帧逐字段）" python3 tests/oracle/test_dns_diff.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
 run "TDLS（建立帧、TPK、MIC、直连帧解密，独立构造）" python3 tests/test_tdls.py

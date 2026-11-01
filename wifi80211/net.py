@@ -8,6 +8,8 @@
 """
 import struct
 
+from . import dns as dns80211
+
 LLC_SNAP = b"\xaa\xaa\x03"
 LLC_STP = b"\x42\x42\x03"
 ETHERTYPES = {0x0800: "ipv4", 0x0806: "arp", 0x86dd: "ipv6", 0x888e: "eapol", 0x88c7: "preauth"}
@@ -138,6 +140,7 @@ def parse_icmp(d, ip=None):
     return {"type": t, "code": c, "checksum": csum, "checksum_ok": ok, "body": bytes(d[4:])}
 
 
+DNS_PORTS = {53, 5353}                                                  # DNS 和 mDNS，报文格式相同
 DHCP_MAGIC = b"\x63\x82\x53\x63"
 DHCP_TYPES = {1: "Discover", 2: "Offer", 3: "Request", 4: "Decline", 5: "ACK", 6: "NAK", 7: "Release", 8: "Inform"}
 
@@ -214,6 +217,11 @@ def describe(msdu):
                 if dh:
                     out["layers"].append("dhcp")
                     out["dhcp"] = dh
+            elif {u["sport"], u["dport"]} & DNS_PORTS:
+                q = dns80211.parse(u["payload"])
+                if q:
+                    out["layers"].append("dns")
+                    out["dns"] = q
     elif proto == 6:
         t = parse_tcp(pl, ip)
         if t:
