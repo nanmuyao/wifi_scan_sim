@@ -649,7 +649,6 @@ def make_demo_pcap(path):
     """用 scapy 生成一段『仿真真实抓包』的混合流量 pcap（管理+控制+数据帧）。"""
     from scapy.layers.dot11 import Dot11, Dot11Beacon, Dot11ProbeReq, Dot11ProbeResp, Dot11Elt, Dot11QoS
     from scapy.packet import Raw
-    import time
 
     frames = []
     # 3 个 AP 的 beacon（不同信道 / 加密属性）
