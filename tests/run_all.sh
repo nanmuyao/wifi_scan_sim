@@ -68,6 +68,7 @@ run "EAPOL-Key 对照 tshark（109 帧）" python3 tests/oracle/test_eapol_diff.
 run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test_kdf80211.py
 run "加密原语（CCM / GCM / RC4 / WEP / TKIP / Michael）" python3 tests/test_crypto80211.py
 run "提速改动的等价性（CTR 批量密钥流、异或、AES 对象复用、mac_str 缓存、iter_frames 收读好的抓包）" python3 tests/test_speedups.py
+run "抓包脚本 tools/capture_monitor.sh（参数检查、命令顺序、出错和 Ctrl-C 时恢复网卡；假命令，没在真实网卡上跑过）" python3 tests/test_capture_script.py
 run "解密标准答案（tshark 用公开密钥解出的明文）" python3 tests/oracle/test_decrypt_oracle.py
 run "A-MSDU 子帧" python3 tests/test_amsdu.py
 run "Action 帧解码" python3 tests/test_action.py

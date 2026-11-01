@@ -50,6 +50,15 @@ Realtek）会报 `Operation not supported`**。
 
 ## 3. 操作步骤
 
+**一条命令版**（路线 B 用这个）：`tools/capture_monitor.sh` 做完下面 3.1–3.4 的事：只让网络管理忽略这一张网卡、切监听模式、锁定信道和宽度、按时间滚动保存，退出（含 Ctrl-C、出错）时恢复网卡。
+
+```bash
+sudo bash tools/capture_monitor.sh -i wlan1 -c 44 --width 80 -d ./caps      # 信道和宽度按路由器的实际值
+bash tools/capture_monitor.sh -i wlan1 -c 44 --dry-run                      # 只打印命令，不改任何东西
+```
+
+它**没有在真实网卡上跑过**，命令格式对照 `iw` 6.7 的帮助和 NetworkManager 手册核对过，出错和被打断时恢复网卡的流程用假命令测过。第一次用请留意输出里的警告。下面是手动步骤，出问题时可以逐条试。
+
 ### 3.1 停用网络管理（避免干扰）
 
 NetworkManager / wpa_supplicant 会周期性切信道、发探测，先停掉：
