@@ -9,10 +9,14 @@
 规则文件格式（自己的规则也是这个格式，只需要 apps 一项）：
   {"apps": [{"app": "公司内网", "category": "办公", "suffix": ["corp.example.com"], "full": ["intranet.example.net"]}]}
 """
+import collections
 import json
+import logging
 import os
 
 from . import activity
+
+log = logging.getLogger(__name__)
 
 DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules", "apps.json")
 ENCRYPTED_DNS = os.path.join(os.path.dirname(DEFAULT), "encrypted_dns.json")      # 手写的加密 DNS 服务器域名（完全匹配，优先于后缀规则：dns.google 归「加密 DNS」而不是 Google）
@@ -22,6 +26,7 @@ SKIP_KINDS = ("mdns",)                                                   # 局�
 class Rules:
     def __init__(self):
         self.suffix, self.full, self.apps = {}, {}, []
+        self.sources = []                                                # 加载过的规则文件路径（日志用）
 
     def add(self, doc, priority_over_existing=False):
         """加入一份规则文档。已有的规则默认优先（先加入的先占）；priority_over_existing=True 时新规则覆盖已有的同名条目。"""
@@ -63,13 +68,12 @@ def _norm(name):
 def load(*extra_paths, bundled=DEFAULT, encrypted_dns=ENCRYPTED_DNS):
     """加载规则：自己的（extra_paths）优先，其次是加密 DNS 服务器，最后是自带的 apps.json（加密 DNS 都是完全匹配，本来就优先于后缀规则，先后顺序不影响结果）。bundled=None 不用自带的，encrypted_dns=None 不用加密 DNS 那份。"""
     r = Rules()
-    for p in extra_paths:
+    for p in list(extra_paths) + [x for x in (encrypted_dns, bundled) if x]:
         with open(p, encoding="utf-8") as f:
             r.add(json.load(f))
-    for p in (encrypted_dns, bundled):
-        if p:
-            with open(p, encoding="utf-8") as f:
-                r.add(json.load(f))
+        r.sources.append(p)
+        log.debug("规则文件 %s：累计 %d 个应用，后缀 %d 条，完全匹配 %d 条", p, len(r.apps), len(r.suffix), len(r.full))
+    log.info("规则：%d 个文件（自己的 %d 个），%d 个应用，后缀 %d 条、完全匹配 %d 条", len(r.sources), len(extra_paths), len(r.apps), len(r.suffix), len(r.full))
     return r
 
 
@@ -106,3 +110,24 @@ def unmatched(rules, events):
         if e["app"] is None and e["kind"] not in SKIP_KINDS:
             c[e["name"]] = c.get(e["name"], 0) + 1
     return sorted(c.items(), key=lambda x: (-x[1], x[0]))
+
+
+def log_coverage(rules, events, hint_min=10):
+    """写进日志：有多少事件（mdns 除外）归到了应用、多少没有规则；最常见的没规则的名字（DEBUG）；没规则的占多数时提示怎么补规则。返回 (归类的, 总数)。"""
+    total = labelled = 0
+    names = collections.Counter()
+    for e in annotate(rules, events):
+        if e["kind"] in SKIP_KINDS:
+            continue
+        total += 1
+        if e["app"]:
+            labelled += 1
+        else:
+            names[e["name"]] += 1
+    if total:
+        log.info("应用归类：%d 个事件（mdns 除外）里 %d 个（%.0f%%）归到了应用，%d 个没有规则（%d 个不同的名字）", total, labelled, 100 * labelled / total, total - labelled, len(names))
+    if names:
+        log.debug("没规则的名字前 10：%s", "、".join("%s×%d" % kv for kv in sorted(names.items(), key=lambda x: (-x[1], x[0]))[:10]))
+    if total >= hint_min and (total - labelled) / total > 0.5:
+        log.warning("超过一半的事件（%d/%d）没有规则认出来：规则没认出这些域名，见 apps.unmatched，可以写进自己的规则（rules/README.md；--rules 加载）", total - labelled, total)
+    return labelled, total

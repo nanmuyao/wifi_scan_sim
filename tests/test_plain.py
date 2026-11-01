@@ -169,7 +169,7 @@ def cli(*args):
     return p.returncode, p.stdout, p.stderr
 
 
-rc, o, e = cli(cappath, "--format", "json")
+rc, o, e = cli(cappath, "--format", "json", "--no-log-file")        # 不写日志文件：默认会在 stderr 印一行日志路径
 doc = json.loads(o) if rc == 0 else {}
 dev = next(d for d in doc.get("devices", []) if d["mac"] == DEV)
 check(rc == 0 and e == "" and doc["frames"]["mode"] == "plain" and doc["frames"]["frames"] == 13 and len(doc["devices"]) == 1, "json：明文模式，13 个包，没给 --keys 也行，stderr 没有提示")

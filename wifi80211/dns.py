@@ -3,7 +3,12 @@
 DNS 报文（RFC 1035；mDNS 的报文格式相同）：解出提问和应答里的域名与地址，用来回答「这台设备查了什么、得到什么地址」。纯标准库。
 parse 对结构不对（头不足 12 字节、提问被截断、指针成环）返回 None，不抛异常；应答区解到一半坏了，保留已解出的并标 truncated。
 """
+import logging
 import struct
+
+from . import logs
+
+log = logging.getLogger(__name__)
 
 TYPES = {1: "A", 2: "NS", 5: "CNAME", 6: "SOA", 12: "PTR", 15: "MX", 16: "TXT", 28: "AAAA", 33: "SRV", 41: "OPT", 64: "SVCB", 65: "HTTPS", 255: "ANY"}
 MAX_JUMPS = 32
@@ -79,6 +84,7 @@ def parse(msg):
     """-> {"id", "response", "opcode", "rcode", "flags", "questions": [{name, type, class, top_bit}], "answers"/"authority"/"additional": [{..., ttl, data}], "truncated"}。
     data：A / AAAA / NS / CNAME / PTR 是字符串，其余类型是原始字节。"""
     if len(msg) < 12:
+        logs.trace(log, "DNS 报文只有 %d 字节，不足 12 字节的头", len(msg))
         return None
     ident, flags, qd, an, ns, ar = struct.unpack(">HHHHHH", msg[:12])
     out = {"id": ident, "flags": flags, "response": bool(flags >> 15), "opcode": (flags >> 11) & 15, "rcode": flags & 15,
@@ -87,6 +93,7 @@ def parse(msg):
     for _ in range(qd):
         r = _record(msg, p, True)
         if r is None:
+            logs.trace(log, "DNS 提问不合法或被截断（偏移 %d）", p)
             return None
         out["questions"].append(r[0])
         p = r[1]
@@ -94,6 +101,7 @@ def parse(msg):
         for _ in range(count):
             r = _record(msg, p, False)
             if r is None:
+                logs.trace(log, "DNS %s 区在偏移 %d 处被截断", key, p)
                 out["truncated"] = True
                 return out
             out[key].append(r[0])

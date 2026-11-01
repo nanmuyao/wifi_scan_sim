@@ -54,6 +54,7 @@ run "明文抓包（以太网 / VLAN / Linux cooked，设备与上下行的判�
 run "明文抓包整条链对照 tshark（以太网与两种 cooked：4 个域名、5 条流逐流相同）" python3 tests/oracle/test_plain_e2e_diff.py
 run "流量统计（每条流的包数 / 字节 / 名字、按应用汇总、并进报告）" python3 tests/test_traffic.py
 run "流量统计对照 tshark（14 个样例 102 条流上下行包数和字节逐流相同）" python3 tests/oracle/test_traffic_diff.py
+run "内容层的日志（ClientHello 读不到的原因、QUIC、校验和、认不出设备、规则提示、结果一行）" python3 tests/test_log_content.py
 run "密钥文件与一条命令出报告（解析、汇总、三种格式、退出码、wpa-Induction 上的 CLI）" python3 tests/test_report.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
