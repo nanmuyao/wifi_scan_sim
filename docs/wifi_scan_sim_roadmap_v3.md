@@ -436,6 +436,23 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 ### 阶段 G（可选）：Wi-Fi 7 与其他
 - MLO（Multi-Link）、TDLS、Extended Key ID 已完成（见上面各节）。Mesh 元素没有样例，用合成帧对照 tshark 做了 Mesh ID 和 Mesh Configuration（`ie.decode_mesh_id` / `decode_mesh_config`）；对等管理和 AMPE 没做。
 
+### 阶段 H：解密之后认出「去了哪里」（`docs/家里WiFi流量分析方案_review.md` 的目标）
+只做被动识别：设备查了什么域名、连了哪个服务器的哪个域名；不看 TLS 的内容，不解密 QUIC 的应用数据。24 个样例里只有 DNS / mDNS 和一条明文 HTTP，没有一条 TLS / QUIC 流，
+所以 H3、H4、H5 的 TLS 与 QUIC 部分靠公开向量（RFC 8448、RFC 9001）和合成流对照 tshark，真实抓包的验证要等监听网卡。
+- **H1 DNS / mDNS**（`dns.py`）：名字压缩（指针只能指回前面，成环或指向后面一律拒绝）、A / AAAA / CNAME / NS / PTR；mDNS 的服务名是 UTF-8。
+  3 个样例 40 个帧与 tshark 逐字段一致（id、QR、rcode、名字、类型、各区记录数、A / AAAA / CNAME，tshark 的地址字段涵盖三个记录区）；wpa3-sae-ext-key-group21 的 2 帧 tshark 解不开（64 字节 PMK），只有我们解出。
+- **H2 TCP 流重组**（`tcpstream.py`）：32 位序号回绕、乱序、重传、重叠、没抓到 SYN、SYN 带数据；校验和不对的段丢掉；缺口不接起来，而是记下缺了多少字节。
+  对 tshark 的 Follow TCP Stream 逐字节相同：wpa-Induction 的 5 条连接 10 个方向 29427 字节（其中 4 个方向样例自己漏抓了包，缺的字节数和 tshark 报的一样），另有 6 条合成连接 12 个方向。
+- **H3 TLS ClientHello**（`tls.py`）：SNI、ALPN、版本（含 supported_versions）、套件数、扩展类型、ECH / ESNI 是否出现；握手消息可被拆在多个 TLS 记录里。
+  RFC 8448 的真实字节加 20 种合成形状与 tshark 逐字段一致。
+- **H4 QUIC Initial**（`quic.py`）：由目的连接 ID 推出 Initial 密钥（v1 与 v2），去头保护，AES-GCM 解 CRYPTO 帧，几个包的 CRYPTO 按偏移拼起来（Chrome 的 ClientHello 要两个包）。
+  RFC 9001 附录 A 的密钥和整包与向量一致；11 个数据报 8 个连接与 tshark 一致。
+- **H5 访问时间线**（`activity.py`）：每个解密后的数据帧归到设备（发往 AP 的取源地址，AP 发来的取目的地址；AP 转发的组播副本、WDS、IBSS 不归任何设备），
+  产生 dns / mdns / tls / quic 事件；没有 SNI 时用这台设备自己先前 DNS 应答里的 IP -> 域名补名字（`via` 标 dns）；`sessions` 按间隔合并，`summary` 按设备统计。
+  wpa-Induction 里设备发出的 17 个 DNS / mDNS 查询（1 台设备、13 个不同名字）帧号、MAC、名字与 tshark 逐帧一致。
+- **还没做**：H6 域名到应用的映射（要一份有来源的、可替换的规则文件，由你定）；DoH / DoT 与 ECH 看不到，只能标「疑似加密」；TCP 上的 DNS（53 端口的 TCP 流）；HTTP/3 之外的 UDP 协议。
+- 变异检查：`dns` 12 处改动 2 处等价；`tcpstream` 15 处 3 处等价；`activity` 约 35 处，等价的有 DNS 端口检查重复（`net.describe` 已按端口判断）、1200 字节下限（`quic` 自己会拒绝）、同一连接里设备不变、找到 ClientHello 后的 `break`。
+
 ## 4. 完成度矩阵（每阶段结束更新）
 
 | 协议能力 | 阶段 | 对照样例 | 状态 |
@@ -455,6 +472,7 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 | Extended Key ID | G | `wpa_ptk_extended_key_id` | **已完成**（新旧两把 PTK 靠 MIC 区分） |
 | 解密后的内容（ARP / IP / UDP / TCP / ICMP / DHCP）与校验和 | F | 全部 | **已完成**：1301 个数据帧，校验和全部吻合（13 个测试图案的 ICMP 例外，tshark 同报 Bad） |
 | Mesh 元素（Mesh ID、Mesh Configuration） | G | 无样例 | **已完成**，用 26 个合成帧逐字段对照 tshark（每一位单独变化）；Mesh 对等管理 / 认证（AMPE）没做，无样例也无合成参照 |
+| 解密后认出访问了什么（DNS / mDNS、TCP 重组、TLS SNI、QUIC Initial、按设备的时间线） | H | `wpa-Induction` 等 3 个样例；TLS / QUIC 用公开向量和合成流 | **已完成**（H1–H5）；样例里没有 TLS / QUIC 流，真实抓包验证等监听网卡；域名到应用的映射（H6）待定 |
 | 包 `wifi80211/` | — | — | **已完成**（模块列表见 `wifi80211/__init__.py`；`wpa2_handshake.py` 是早期实现，保留作历史） |
 
 ## 5. 硬件怎么看（给不熟悉硬件的读者）

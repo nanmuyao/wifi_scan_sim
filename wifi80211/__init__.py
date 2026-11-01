@@ -9,6 +9,8 @@ wifi80211：802.11 帧的解析、解密与密钥推导（纯标准库，Python 
   decrypt / tdls                          数据帧与管理帧解密（CCMP / GCMP / TKIP / WEP / BIP / 用户 TK）、TDLS
   sae                                     SAE 认证帧与曲线检查
   net / pipeline                          解密后的 LLC / ARP / IP / UDP / TCP / ICMP / DHCP，以及把以上各层接起来的 decrypt_capture
+  dns / tcpstream / tls / quic            解密后的内容识别：DNS / mDNS 报文、TCP 流重组、TLS ClientHello（SNI）、QUIC Initial
+  activity                                把以上读出的 DNS 查询和 SNI 按设备（MAC）汇总成事件和访问时间线
 
 用法：from wifi80211 import pipeline；pipeline.decrypt_capture(frames, keys)（见 docs/architecture 和路线图）。
 """

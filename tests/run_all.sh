@@ -41,6 +41,10 @@ run "TCP 流重组（乱序、重传、重叠、回绕、缺口，scapy 独立�
 run "TCP 流重组对照 tshark 的 Follow TCP Stream（真实抓包 10 个方向含 4 处缺包 + 合成 12 个方向）" python3 tests/oracle/test_tcpstream_diff.py
 run "TLS ClientHello（SNI、ALPN、版本、ECH；RFC 8448 的真实字节，独立构造器）" python3 tests/test_tls.py
 run "TLS ClientHello 对照 tshark（20 种形状逐字段）" python3 tests/oracle/test_tls_diff.py
+run "QUIC Initial（密钥推导、头保护、CRYPTO 重组；RFC 9001 附录 A 的向量，独立构造器）" python3 tests/test_quic.py
+run "QUIC Initial 对照 tshark（11 个数据报逐字段，8 个连接的 SNI）" python3 tests/oracle/test_quic_diff.py
+run "设备访问事件（DNS / TLS SNI、设备归属、时间线，合成帧）" python3 tests/test_activity.py
+run "设备访问事件对照 tshark（DNS 查询逐帧，设备 MAC 和名字）" python3 tests/oracle/test_activity_diff.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
 run "TDLS（建立帧、TPK、MIC、直连帧解密，独立构造）" python3 tests/test_tdls.py
