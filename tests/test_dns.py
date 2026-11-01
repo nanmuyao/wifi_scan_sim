@@ -46,6 +46,8 @@ check([r["ttl"] for r in m["answers"]] == [300, 60, 61] and m["answers"][1]["nam
 txt = dns.parse(HDR(0, 1) + Q("x.y", 16)[:-4] + struct.pack(">HHIH", 16, 1, 5, 4) + b"\x03abc")
 check(txt["answers"][0]["data"] == b"\x03abc", "不认识展开方式的类型（TXT）：data 是原始字节")
 check(dns.parse(HDR(0, 1) + Q("x.y", 1)[:-4] + struct.pack(">HHIH", 1, 1, 5, 3) + b"\x01\x02\x03")["answers"][0]["data"] == b"\x01\x02\x03", "A 记录长度不是 4：不当地址，保留原始字节")
+check(dns.parse(HDR(0, 1) + Q("x.y", 28)[:-4] + struct.pack(">HHIH", 28, 1, 5, 4) + b"\x01\x02\x03\x04")["answers"][0]["data"] == b"\x01\x02\x03\x04", "AAAA 记录长度不是 16：保留原始字节")
+check(dns.parse(HDR(0, 1) + Q("x.y", 5)[:-4] + struct.pack(">HHIH", 5, 1, 5, 2) + b"\x03abc\0")["answers"][0]["data"] == b"\x03a", "CNAME 的名字超出记录自己的长度：不越界读，保留原始字节")
 mdns = dns.parse(HDR(1) + Q("_hap._tcp.local", 12)[:-2] + struct.pack(">H", 0x8001))
 check(mdns["questions"][0]["class"] == 1 and mdns["questions"][0]["top_bit"] == 1, "mDNS 的类高位（单播响应 / 缓存刷新）拆出来，类仍是 1")
 
