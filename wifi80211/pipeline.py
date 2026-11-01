@@ -3,7 +3,7 @@
 把前面各层接起来：一个抓包文件 + 密钥表 -> 每个受保护数据帧解密后的 MSDU（LLC/SNAP 开头）。纯标准库。
 
 顺序：4 次握手 / 重新握手 / FT 漫游推出的 PTK（handshake80211），M3 / G1 / FT 响应里的 GTK（groupkeys80211），WEP 密钥；
-每个受保护的帧依次试 WEP、单播（成对密钥）、组播（GTK），最后是 TDLS 对端直连（TPK），MIC / ICV 通过的才算解开。QoS 的 A-MSDU 位置位的帧拆成多个 MSDU。
+每个受保护的帧依次试 WEP、单播（成对密钥）、组播（GTK）、用户直接给的 TK，最后是 TDLS 对端直连（TPK），MIC / ICV 通过的才算解开。QoS 的 A-MSDU 位置位的帧拆成多个 MSDU。
 """
 from . import amsdu
 from . import decrypt as dec
@@ -13,12 +13,13 @@ from . import tdls as tdls80211
 
 
 def decrypt_capture(frames, keys):
-    """frames：frames80211.iter_frames 的结果（列表）。返回 {帧号: {"how": "wep" / "pairwise" / "group", "msdus": [bytes, ...]}}，
+    """frames：frames80211.iter_frames 的结果（列表）。返回 {帧号: {"how": "wep" / "pairwise" / "group" / "user_tk" / "tdls", "msdus": [bytes, ...]}}，
     只含解开了的受保护数据帧（受保护的管理帧、认证帧里的 WEP 不含 LLC，不在其中）。"""
     done, _ = hs.track(frames, keys)
     mld = hs.mld_addresses(frames)
     gkeys, gciph = gk.track_group(frames, done), gk.group_ciphers(frames, done)
     wkeys = dec.wep_keys(keys)
+    utks = dec.user_tks(keys)
     out = {}
     for f in frames:
         h = f.h
@@ -36,6 +37,10 @@ def decrypt_capture(frames, keys):
                 g = gk.decrypt_group(gkeys, gciph, f)
                 if g is not None:
                     how, plain = "group", g[1]
+                else:
+                    u = dec.decrypt_user_tk(utks, f, mld) if utks else None            # 用户直接给的 TK（密钥表里的 "tk" 项），没有握手也能解单播帧
+                    if u is not None:
+                        how, plain = "user_tk", u[0]
         if plain is None:
             continue
         if h["qos"] is not None and h["qos"]["amsdu"]:

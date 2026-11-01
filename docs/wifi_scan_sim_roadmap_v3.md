@@ -462,6 +462,9 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
   每台设备列出应用（类别、段数、事件数、估计时长、起止时间）和没有规则的域名；密钥文件是 Wireshark 的 `"类型","值"` 格式（wpa-pwd / wpa-psk / msk / wep / tk），错误信息不回显密钥。
   口令对时在 wpa-Induction 上 280 个受保护数据帧解开 276 个，得到 1 台设备 28 个事件（13 个 DNS、4 个 mDNS、11 个 HTTP）；口令错时退出码 3 并说明有多少帧一个也没解开；输出里写明「时长是估计，DoH / DoT / ECH 看不到」。
   变异检查 48 处，起初 20 处存活，补用例后全部抓住。
+- **端到端对照**（`tests/oracle/test_wifi_e2e_diff.py`）：样例里没有 TLS / QUIC 流，所以合成了一个 CCMP 加密的 802.11 抓包（独立加密方），里面有 DNS、拆成两段的 TLS ClientHello、明文 HTTP、QUIC Initial，只给一把 TK，
+  走完整条链（解密 -> 事件），读出的 4 个域名与 tshark 用同一把 TK 解密后读到的逐项相同。这一步还发现 `pipeline.decrypt_capture` 一直没用密钥表里的 `tk` 项（`decrypt_user_tk` 只有测试在调），
+  现在补上了：没有握手也能解单播帧，`how` 标 `user_tk`。
 - **加密 DNS**：`rules/encrypted_dns.json` 手写了 5 家公开 DoH / DoT 服务（Google、Cloudflare、Quad9、AdGuard、阿里），域名都在服务商说明页上核对过，类别「加密 DNS」；设备连这些名字时我们只能说「它的 DNS 被加密了」。
 - **还没做**：ECH 看不到；非公开的 DoH 服务器认不出；HTTP/3 之外的 UDP 协议。
 - 变异检查：`apps` 25 处，起初 4 处存活，补用例后全部抓住（剩下的是文档字符串里的字和重复的类型检查）；`dns` 12 处改动 2 处等价；`tcpstream` 15 处 3 处等价；`activity` 约 35 处，等价的有 DNS 端口检查重复（`net.describe` 已按端口判断）、1200 字节下限（`quic` 自己会拒绝）、同一连接里设备不变、找到 ClientHello 后的 `break`。

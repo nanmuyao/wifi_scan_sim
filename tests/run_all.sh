@@ -48,6 +48,7 @@ run "设备访问事件对照 tshark（DNS 查询逐帧，设备 MAC 和名字�
 run "域名 -> 应用（匹配规则、自己的规则、使用估计、规则文件结构与来源）" python3 tests/test_apps.py
 run "HTTP 请求事件对照 tshark（wpa-Induction 5 条连接 11 个请求）" python3 tests/oracle/test_http_diff.py
 run "TCP 上的 DNS 对照 tshark（6 条合成连接：拆开的长度前缀、一段两条消息、乱序）" python3 tests/oracle/test_dns_tcp_diff.py
+run "整条链端到端对照 tshark（CCMP 加密的合成抓包，只给一把 TK：DNS / TLS SNI / HTTP Host / QUIC SNI）" python3 tests/oracle/test_wifi_e2e_diff.py
 run "密钥文件与一条命令出报告（解析、汇总、三种格式、退出码、wpa-Induction 上的 CLI）" python3 tests/test_report.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
