@@ -46,6 +46,7 @@ def decrypt_capture(frames, keys, stats=None):
     protected = 0
     tr = log.isEnabledFor(logs.TRACE)
     failed = []                                                # 没解开的受保护数据帧
+    am = {"frames": 0, "subframes": 0, "bad": []}              # A-MSDU：拆了几个帧、几个子帧，帧体不合法的帧号
     for f in frames:
         h = f.h
         if h["type"] != 2 or not h["protected"]:
@@ -73,7 +74,12 @@ def decrypt_capture(frames, keys, stats=None):
                 logs.trace(log, "第 %d 帧：受保护的数据帧，没解开（%s -> %s）", f.n, h["addr2"], h["addr1"])
             continue
         if h["qos"] is not None and h["qos"]["amsdu"]:
-            msdus = [bytes(s["payload"]) for s in amsdu.parse(plain)["subframes"]]
+            parsed = amsdu.parse(plain)
+            msdus = [bytes(s["payload"]) for s in parsed["subframes"]]
+            am["frames"] += 1
+            am["subframes"] += len(msdus)
+            if parsed["truncated"]:
+                am["bad"].append(f.n)
         else:
             msdus = [plain]
         out[f.n] = {"how": how, "msdus": msdus}
@@ -90,6 +96,11 @@ def decrypt_capture(frames, keys, stats=None):
     by_how = {}
     for v in out.values():
         by_how[v["how"]] = by_how.get(v["how"], 0) + 1
+    if am["frames"]:
+        log.info("A-MSDU：%d 个帧拆出 %d 个子帧", am["frames"], am["subframes"])
+    if am["bad"]:
+        log.warning("%d 个帧的 A-MSDU 帧体不合法（置位了 A-MSDU 但读不出完整的子帧；按读得出来的子帧处理），例：帧 %s",
+                    len(am["bad"]), "、".join(str(n) for n in am["bad"][:5]))
     log.info("解密结果：受保护的数据帧 %d 个，解开 %d 个%s，没解开 %d 个", protected, len(out), "（%s）" % "、".join("%s %d" % kv for kv in sorted(by_how.items())) if by_how else "", len(failed))
     reasons, examples, pair_frames = _classify(failed, done, gkeys, gciph, mld) if failed and (stats is not None or log.isEnabledFor(logging.DEBUG)) else ({}, {}, {})
     for r, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
@@ -99,6 +110,7 @@ def decrypt_capture(frames, keys, stats=None):
         log.warning("一半以上的受保护数据帧没解开（%d / %d）%s", protected - len(out), protected, "，主要原因：" + _reason_text(top) if top else "")
     if stats is not None:
         stats.update({"frames": len(frames), "protected_data": protected, "decrypted": len(out), "by_how": by_how, "undecrypted": reasons, "examples": examples,
+                      "amsdu": {"frames": am["frames"], "subframes": am["subframes"], "bad_frames": len(am["bad"]), "examples": am["bad"][:5]},
                       "pair_frames": [{"ap": ap, "sta": sta, "reason": r, "count": n} for (ap, sta, r), n in sorted(pair_frames.items())],
                       "keys": ksum, "wep_keys": len(wkeys), "user_tks": len(utks), "handshake": tstats, "group": gstats, "tdls_keys": len(tkeys)})
     return out

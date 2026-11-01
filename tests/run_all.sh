@@ -81,6 +81,7 @@ run "解析结果对照 tshark（24 个公开样例）" python3 tests/oracle/tes
 run "抓包读取对照 tshark（24 个公开样例）" python3 tests/oracle/test_capture_oracle.py
 run "帧类型表对照 tshark" python3 tests/oracle/test_subtype_names.py
 run "固件接收链路仿真（真实 main.c <-> esp8266_sim，含故障注入）" python3 tests/test_sim_chain.py
+run "CCMP 加密的 A-MSDU：解密 -> 拆子帧 -> 事件 / 流量对照 tshark（含帧体不合法的帧）" python3 tests/oracle/test_amsdu_decrypted_diff.py
 
 echo; echo "################ 汇总"
 if [ ${#failed[@]} -eq 0 ]; then echo "全部通过"; exit 0; fi
