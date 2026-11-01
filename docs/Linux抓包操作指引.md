@@ -115,6 +115,28 @@ python3 wifi_frame_parser.py --pcap capture.pcap
 若抓包时同时做了 WPA2 连接（见 4），阶段 4 的 `wpa2_handshake.py --pcap capture.pcap`
 可进一步解析握手报文（1/4、2/4、3/4、4/4 及 ANonce/SNonce/MIC/Key Info）。
 
+### 3.6 一条命令出报告（解密 + 每台设备访问了什么）
+
+抓到的包含四次握手（设备连接的那一刻），并且你知道这个 WiFi 的口令和 SSID，就可以不经过 Wireshark 直接出报告。先写一个密钥文件 `keys.txt`（Wireshark 的格式，一行一把，**不要提交到仓库**）：
+
+```
+"wpa-pwd","你的口令:你的SSID"
+```
+
+然后：
+
+```bash
+python3 -m wifi80211.report capture.pcap --keys keys.txt
+# 或者 python3 wifi_report.py capture.pcap --keys keys.txt
+```
+
+输出每台设备（MAC）的访问事件、归到的应用（类别、估计的使用段数和秒数）、没有规则的域名。常用选项：`--format json|csv`、`--device MAC`、`--gap 60`（相邻访问多少秒内算同一段）、
+`--unmatched 15`（每台设备列出多少个没有规则的域名）、`--min-events N`、`--rules my.json`（自己的域名 -> 应用规则，格式见 `rules/README.md`，优先于自带规则）。
+密钥文件还可以放 `wpa-psk`（直接给 PMK）、`msk`、`wep`、`tk`，见 `wifi80211/keyfile.py`。
+
+注意：使用时长是从网络活动推出的估计，不是屏幕使用时间；DoH / DoT / ECH 加密的访问看不到；开放网络（没有加密）的明文暂不支持。
+如果提示「一个也没解开」，多半是口令或 SSID 不对，或者抓包里没有完整的四次握手——关掉设备的 WiFi 再打开，重新抓一次。
+
 ## 4. 抓一份「四次握手」样本（供阶段 4 验证）
 
 1. 准备一台已知口令的 WPA2 AP（自建路由器或手机热点）；
