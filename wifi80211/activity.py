@@ -3,10 +3,14 @@
 设备在访问什么：把解密后的明文（pipeline.decrypt_capture 的结果）逐帧读成事件——设备查了哪个域名（DNS）、连了哪个服务器的哪个域名（TLS 的 SNI）——
 再按设备（MAC）汇总成访问时间线。纯标准库，只做被动识别，不碰 TLS 内容。
 
-事件：{"ts", "station", "kind": "dns" | "mdns" | "tls" | "quic", "name", "server"（kind 为 tls 时是服务器 IP）, "port", "qtype"（dns）,"via"（tls / quic）, "frame"}。
+事件：{"ts", "station", "kind": "dns" | "mdns" | "tls" | "quic" | "http" | "dot", "transport"（dns / mdns：udp 或 tcp）, "name", "server"（kind 为 tls 时是服务器 IP）, "port", "qtype"（dns）, "via"（tls / quic / http / dot）, "method"、"path"（http）, "frame"}。
 一条 TLS 连接只在两个方向之一拿到完整 ClientHello（谁发出它谁就是客户端）时产生事件；ClientHello 缺了开头或被缺口截断（还没读到 SNI）的连接没有事件，
 名字没有 SNI 时用这台设备先前 DNS 应答里的 IP -> 域名 补一个（kind 仍是 tls，字段 via 为 "dns"，SNI 的是 "sni"）。
+还读三种明文：TCP 上的 HTTP/1.x 请求（kind=http，名字是 Host 头，via 为 "host"，没有 Host 才用 DNS 应答补，每个请求一个事件）、
+TCP 53 端口上的 DNS（kind=dns，transport=tcp；它的应答也进 IP -> 域名表）、853 端口上的 TLS（DNS over TLS，kind=dot，只记连了哪台服务器：名字取 SNI，没有就用服务器 IP，via 为 "ip"）。
 """
+import re
+
 from . import dns as dns80211
 from . import net
 from . import quic
@@ -15,6 +19,61 @@ from . import tls as tls80211
 
 MDNS_PORT = 5353
 QUIC_MIN = 1200
+DOT_PORT = 853
+HTTP_WINDOW = 64 * 1024                                              # 一条连接的客户端方向只看开头这么多字节里的请求
+HTTP_PATH_MAX = 200
+HTTP_REQUEST = re.compile(rb"(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH|CONNECT|TRACE) (\S+) HTTP/\d\.\d$")
+
+
+def http_requests(data):
+    """客户端方向的字节里依次出现的 HTTP/1.x 请求：[{"method", "path", "host"（没有 Host 头是 None）}]。
+    只认头部完整（有 \\r\\n\\r\\n）的请求；Content-Length 给出的请求体跳过，跳不过去（体没到齐 / 后面不是请求行）就停。只看开头 HTTP_WINDOW 字节；
+    传入的是一段连续的字节（缺口两侧要分开传）。"""
+    data, pos, out = data[:HTTP_WINDOW], 0, []
+    while pos < len(data):
+        end = data.find(b"\r\n\r\n", pos)
+        if end < 0:
+            break
+        lines = data[pos:end].split(b"\r\n")
+        m = HTTP_REQUEST.match(lines[0])
+        if m is None:
+            break
+        host, clen = None, 0
+        for ln in lines[1:]:
+            name, _, val = ln.partition(b":")
+            name = name.strip().lower()
+            if name == b"host" and host is None:
+                host = _host_name(val.strip().decode("latin-1"))
+            elif name == b"content-length" and val.strip().isdigit():
+                clen = int(val.strip())
+        out.append({"method": m.group(1).decode(), "path": m.group(2).decode("latin-1")[:HTTP_PATH_MAX], "host": host})
+        pos = end + 4 + clen
+    return out
+
+
+def _host_name(v):
+    """Host 头的值 -> 小写域名 / IP，去掉端口（[IPv6]:端口 也处理）；空值是 None。"""
+    v = v.lower()
+    if v.startswith("["):
+        v = v[1:v.find("]")] if "]" in v else v[1:]
+    elif v.count(":") == 1:
+        h, _, port = v.partition(":")
+        v = h if port.isdigit() or port == "" else v
+    return v or None
+
+
+def dns_over_tcp(data):
+    """TCP 上的 DNS（每条消息前有 2 字节长度）-> 解出的消息列表；最后一条没到齐就丢掉，解不出的消息跳过但长度照算。"""
+    out, pos = [], 0
+    while len(data) - pos >= 2:
+        n = int.from_bytes(data[pos:pos + 2], "big")
+        if len(data) - pos - 2 < n:
+            break
+        q = dns80211.parse(data[pos + 2:pos + 2 + n])
+        if q is not None:
+            out.append(q)
+        pos += 2 + n
+    return out
 
 
 def station_of(h):
@@ -50,7 +109,7 @@ def build(frames, decrypted):
                 if not q["response"] and q["questions"] and u["dport"] in (53, MDNS_PORT):
                     qq = q["questions"][0]
                     events.append({"ts": f.ts, "station": st, "kind": "mdns" if u["dport"] == MDNS_PORT else "dns", "name": qq["name"], "qtype": qq["type"],
-                                   "server": ip["dst"], "port": u["dport"], "frame": n})
+                                   "server": ip["dst"], "port": u["dport"], "transport": "udp", "frame": n})
                 elif q["response"] and u["sport"] == 53 and q["questions"]:
                     for a in q["answers"]:
                         if a["type"] in (1, 28) and isinstance(a["data"], str):
@@ -65,18 +124,48 @@ def build(frames, decrypted):
                 flows.add(ip["src"], ip["dst"], t, n)
                 owner.setdefault(key, st)
                 first_ts.setdefault(key, f.ts)
-    for p in flows.pairs():
+    pairs = flows.pairs()
+    for p in pairs:                                                  # 先处理 TCP 上的 DNS：它的应答要给后面的连接补名字
         k = p["key"]
-        for key, d in ((k, p["fwd"]), ((k[2], k[3], k[0], k[1]), p["rev"])):         # 哪一方是客户端不靠 SYN 认：谁发出了 ClientHello 谁就是（抓包可能从连接中途开始）
-            hello = tls80211.parse_client_hello(d.data()) if d is not None else None
-            if hello is None:
+        for key, d in ((k, p["fwd"]), ((k[2], k[3], k[0], k[1]), p["rev"])):
+            if d is None or 53 not in (key[1], key[3]):
                 continue
             st = owner[key]
-            sni = hello["sni"][0] if hello["sni"] else None
-            name = sni or answers.get((st, key[2]))
-            if name is not None:
-                events.append({"ts": first_ts[key], "station": st, "kind": "tls", "name": name, "server": key[2], "port": key[3], "via": "sni" if sni else "dns", "frame": d.first_frame})
-            break
+            for q in dns_over_tcp(d.data()):
+                if not q["response"] and q["questions"] and key[3] == 53:
+                    qq = q["questions"][0]
+                    events.append({"ts": first_ts[key], "station": st, "kind": "dns", "name": qq["name"], "qtype": qq["type"], "server": key[2], "port": 53, "transport": "tcp",
+                                   "frame": d.first_frame})
+                elif q["response"] and key[1] == 53 and q["questions"]:
+                    for a in q["answers"]:
+                        if a["type"] in (1, 28) and isinstance(a["data"], str):
+                            answers[(st, a["data"])] = q["questions"][0]["name"]
+    for p in pairs:
+        k = p["key"]
+        for key, d in ((k, p["fwd"]), ((k[2], k[3], k[0], k[1]), p["rev"])):         # 哪一方是客户端不靠 SYN 认：谁发出了 ClientHello / 请求行谁就是（抓包可能从连接中途开始）
+            if d is None:
+                continue
+            data = d.data()
+            hello = tls80211.parse_client_hello(data)
+            st = owner[key]
+            if hello is not None:
+                sni = hello["sni"][0] if hello["sni"] else None
+                if key[3] == DOT_PORT:                               # DNS over TLS：只记连了哪台服务器，不看里面的查询（加密的）
+                    events.append({"ts": first_ts[key], "station": st, "kind": "dot", "name": sni or key[2], "server": key[2], "port": key[3], "via": "sni" if sni else "ip",
+                                   "frame": d.first_frame})
+                    break
+                name = sni or answers.get((st, key[2]))
+                if name is not None:
+                    events.append({"ts": first_ts[key], "station": st, "kind": "tls", "name": name, "server": key[2], "port": key[3], "via": "sni" if sni else "dns", "frame": d.first_frame})
+                break
+            reqs = [r for kind, piece in d.pieces() if kind == "data" for r in http_requests(piece)]      # 缺口之后的一段若恰好从请求行开始，照样读（tshark 也这样）
+            if reqs:
+                for r in reqs:
+                    name = r["host"] or answers.get((st, key[2]))
+                    if name is not None:
+                        events.append({"ts": first_ts[key], "station": st, "kind": "http", "name": name, "server": key[2], "port": key[3], "via": "host" if r["host"] else "dns",
+                                       "method": r["method"], "path": r["path"], "frame": d.first_frame})
+                break
     for (st, _src, _sport, dst, dport), c in udp.items():
         for conn in quic.collect(c["datagrams"]).values():
             if conn["client_hello"] is None:
