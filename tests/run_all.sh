@@ -80,6 +80,8 @@ run "解析结果对照 tshark（24 个公开样例）" python3 tests/oracle/tes
 run "抓包读取对照 tshark（24 个公开样例）" python3 tests/oracle/test_capture_oracle.py
 run "帧类型表对照 tshark" python3 tests/oracle/test_subtype_names.py
 run "固件接收链路仿真（真实 main.c <-> esp8266_sim，含故障注入）" python3 tests/test_sim_chain.py
+run "抓包质量（序号缺口、回绕、重传、分片、断档、两种 AP 的计数器分法、已知丢帧率、设备汇总与提示）" python3 tests/test_health.py
+run "抓包质量的序号统计对照 tshark（24 个样例逐个计数器、真实样例上的删帧实验）" python3 tests/oracle/test_health_diff.py
 
 echo; echo "################ 汇总"
 if [ ${#failed[@]} -eq 0 ]; then echo "全部通过"; exit 0; fi
