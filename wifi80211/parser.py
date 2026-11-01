@@ -19,6 +19,7 @@ scapy 仅用于【生成】标准测试帧；解析路径完全是手写字节�
 import logging
 import struct
 import zlib
+from functools import lru_cache
 
 from . import action
 from . import amsdu
@@ -82,8 +83,15 @@ def parse_frame_control(fc):
     }
 
 
-def mac_str(raw):
+@lru_cache(maxsize=4096)
+def _mac_str(raw):
     return ":".join("%02x" % b for b in raw)
+
+
+def mac_str(raw):
+    """6 字节 -> "aa:bb:cc:dd:ee:ff"。同一个地址只格式化一次，返回的是同一个字符串对象（一个抓包里设备就那么几个，
+    每帧 5、6 个地址串不再各占一份内存）。"""
+    return _mac_str(bytes(raw))
 
 
 def parse_mac_header(buf):

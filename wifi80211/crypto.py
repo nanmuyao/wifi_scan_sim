@@ -13,19 +13,32 @@
 """
 import struct
 import zlib
+from functools import lru_cache
 
 
 # ---------------------------------------------------------------------------
 # AES 单块
 # ---------------------------------------------------------------------------
+@lru_cache(maxsize=64)
+def _ecb(key):
+    """同一把密钥只建一次 AES 对象（建对象比加密一块还贵；ECB 加密不带状态，可以复用）。"""
+    from Crypto.Cipher import AES
+    return AES.new(key, AES.MODE_ECB)
+
+
 def aes_block(key, block):
     """AES 单块加密（ECB），key 16 或 32 字节。"""
-    from Crypto.Cipher import AES
-    return AES.new(bytes(key), AES.MODE_ECB).encrypt(bytes(block))
+    return _ecb(bytes(key)).encrypt(bytes(block))
+
+
+def aes_blocks(key, blocks):
+    """AES-ECB 一次加密多块（长度是 16 的倍数），CTR 的密钥流用这个批量算。"""
+    return _ecb(bytes(key)).encrypt(bytes(blocks))
 
 
 def _xor(a, b):
-    return bytes(x ^ y for x, y in zip(a, b))
+    n = min(len(a), len(b))
+    return (int.from_bytes(a[:n], "big") ^ int.from_bytes(b[:n], "big")).to_bytes(n, "big")
 
 
 # ---------------------------------------------------------------------------
@@ -46,11 +59,9 @@ def _ccm_mac(key, nonce, aad, msg, m, l):
 
 
 def _ccm_ctr(key, nonce, data, l, start):
-    out = bytearray()
-    for i in range(0, len(data), 16):
-        ks = aes_block(key, bytes([l - 1]) + nonce + (start + i // 16).to_bytes(l, "big"))
-        out += _xor(data[i:i + 16], ks)
-    return bytes(out)
+    head = bytes([l - 1]) + nonce
+    ks = aes_blocks(key, b"".join(head + (start + i).to_bytes(l, "big") for i in range((len(data) + 15) // 16)))
+    return _xor(data, ks)
 
 
 def ccm_encrypt(key, nonce, aad, plaintext, mic_len=8, l=2):
@@ -109,12 +120,12 @@ def _ghash(h, aad, ct):
 
 
 def _gcm_ctr(key, j0, data):
-    out = bytearray()
-    ctr = int.from_bytes(j0, "big")
-    for i in range(0, len(data), 16):
-        ctr = (ctr & ~0xFFFFFFFF) | ((ctr + 1) & 0xFFFFFFFF)
-        out += _xor(data[i:i + 16], aes_block(key, ctr.to_bytes(16, "big")))
-    return bytes(out)
+    base = int.from_bytes(j0, "big")
+    ctrs = []
+    for _ in range((len(data) + 15) // 16):
+        base = (base & ~0xFFFFFFFF) | ((base + 1) & 0xFFFFFFFF)       # 只有低 32 位在数，到头回绕
+        ctrs.append(base.to_bytes(16, "big"))
+    return _xor(data, aes_blocks(key, b"".join(ctrs)))
 
 
 def gcm_encrypt(key, iv, aad, plaintext, tag_len=16):

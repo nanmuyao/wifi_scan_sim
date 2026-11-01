@@ -253,7 +253,8 @@ def _main(argv):
     else:
         if not keys:
             return err("802.11 抓包需要 --keys（密钥文件）")
-        fr = list(frames.iter_frames(a.capture))
+        fr = list(frames.iter_frames(cap))
+        cap.packets = []                    # 原始包不再用了（帧里有自己的数据），先放掉，大抓包省下一份内存
         protected = sum(1 for f in fr if f.h["type"] == 2 and f.h["protected"])
         dec = pipeline.decrypt_capture(fr, keys)
         stats = {"frames": len(fr), "protected": protected, "decrypted": len(dec), "mode": "dot11"}

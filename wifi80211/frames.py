@@ -21,8 +21,9 @@ log = logging.getLogger(__name__)
 Frame = namedtuple("Frame", "n ts dot11 h body fcs_ok")
 
 
-def iter_frames(path):
-    cap = capture.read_capture(path)
+def iter_frames(src):
+    """src：抓包文件路径，或者已经读好的 capture.Capture（调用方本来就要读一遍的时候传这个，省得再读一遍文件）。"""
+    cap = src if isinstance(src, capture.Capture) else capture.read_capture(src)
     # 汇总只在日志级别 INFO 或更细时收集；日志关掉（库默认）时循环里只多一次 None 判断
     st = _Stats() if log.isEnabledFor(logging.INFO) else None
     for n, pkt in enumerate(cap.packets, 1):
