@@ -77,7 +77,13 @@ print("== 按应用 ==")
 
 class Rules:
     def label(self, name):
-        return {"app": "视频应用", "category": "视频"} if name.endswith("video.example") else None
+        if name.endswith("video.example"):
+            return {"app": "视频应用", "category": "视频", "company": None}
+        if name.endswith("m1.example"):
+            return {"app": "成员一", "category": "视频", "company": "某公司"}
+        if name.endswith("m2.example"):
+            return {"app": "成员二", "category": "社交", "company": "某公司"}
+        return None
 
 
 cells1 = {i: fast // 2 for i in range(100, 112)}
@@ -93,6 +99,26 @@ s = streaming.summary(Rules(), fl)
 check(list(s) == [("d1", "视频应用")] and s[("d1", "视频应用")]["seconds"] == 60 and s[("d1", "视频应用")]["bytes_down"] == 12 * fast, "同一应用的两条流合起来算；没规则 / 没名字 / 只有上行的不算；设备分开")
 series = streaming.app_series(Rules(), fl)
 check(set(series) == {("d1", "视频应用")} and series[("d1", "视频应用")][100] == fast, "app_series：只含认得出应用的流，下行字节逐格相加")
+check(s[("d1", "视频应用")]["apps"] == ["视频应用"], "summary：没写 company 的应用，组就是它自己")
+
+print("== 同一家公司合起来算 ==")
+half = {k: [0, fast // 4] for k in range(100, 112)}           # 每个成员单独只有门槛的一半（fast 是 100 KB/秒，这里 25 KB/秒，门槛 50）：单独看都不成时段，两个合起来刚好过线
+fl2 = [{"station": "d1", "name": "a.m1.example", "bins": half}, {"station": "d1", "name": "b.m2.example", "bins": half},
+       {"station": "d1", "name": "c.video.example", "bins": half}, {"station": "d2", "name": "a.m1.example", "bins": half}]
+s3 = streaming.summary(Rules(), fl2)
+check(set(s3) == {("d1", "某公司")}, "两个应用的 company 相同：合成一组「某公司」，各自单独看都不够的流量合起来过了门槛")
+check(("d1", "某公司") in s3 and s3[("d1", "某公司")]["apps"] == ["成员一", "成员二"] and s3[("d1", "某公司")]["seconds"] == 60 and s3[("d1", "某公司")]["bytes_down"] == 12 * (fast // 2), "成员列表是排好序的两个应用，字节是两个应用相加")
+check(("d1", "视频应用") not in s3, "没写 company 的应用不会被并进别人的组，它自己单独看不够门槛")
+check(("d2", "某公司") not in s3, "设备之间不合并：d2 只有一个成员的一半流量，不成时段")
+check(streaming.app_series(Rules(), fl2)[("d1", "某公司")][100] == fast // 2, "app_series：组的格子是成员的下行相加")
+mem = {}
+streaming.app_series(Rules(), fl2, mem)
+check(mem == {("d1", "某公司"): {"成员一", "成员二"}, ("d1", "视频应用"): {"视频应用"}, ("d2", "某公司"): {"成员一"}}, "app_series 填 members：每组出现过的应用")
+
+print("== 没有名字的下行占多少 ==")
+fl3 = [{"station": "d1", "name": "a.m1.example", "bytes_down": 600}, {"station": "d1", "name": None, "bytes_down": 400}, {"station": "d2", "name": None, "bytes_down": 0},
+       {"station": "d2", "name": "x", "bytes_down": 0}]
+check(streaming.unnamed_share(fl3) == {"d1": (400, 1000), "d2": (0, 0)}, "unnamed_share：每台设备没有名字的下行字节和全部下行字节")
 s2 = streaming.summary(Rules(), fl, min_rate=2 * RATE)
 check(s2 == {}, "提高门槛：没有时段就不出现在结果里")
 

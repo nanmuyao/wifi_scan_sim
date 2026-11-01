@@ -33,7 +33,7 @@ A = {"apps": [{"app": "甲", "category": "视频", "suffix": ["example.com", "cd
               {"app": "乙", "category": "社交", "suffix": ["deep.example.com", "other.org"]}]}
 r = rules(A)
 print("== 匹配 ==")
-check(r.label("example.com") == {"app": "甲", "category": "视频", "how": "suffix", "rule": "example.com"}, "域名本身命中后缀规则")
+check(r.label("example.com") == {"app": "甲", "category": "视频", "company": None, "how": "suffix", "rule": "example.com"}, "域名本身命中后缀规则；没写 company 的是 None")
 check(r.label("a.b.example.com")["app"] == "甲" and r.label("a.b.example.com")["rule"] == "example.com", "子域名命中，rule 是命中的那条规则")
 check(r.label("notexample.com") is None and r.label("example.com.evil.net") is None, "后缀必须落在标签边界上；规则域名出现在名字中间不算")
 check(r.label("x.deep.example.com")["app"] == "乙", "多条规则都能命中时取最长的后缀（deep.example.com 比 example.com 长）")
@@ -67,6 +67,33 @@ for bad, why in (([], "不是对象"), ({}, "没有 apps"), ({"apps": [{"categor
         check(False, "拒绝非法规则：%s" % why)
     except ValueError:
         check(True, "拒绝非法规则：%s" % why)
+
+print("== company（同一家公司的几个应用） ==")
+rc = rules({"apps": [{"app": "甲", "category": "视频", "suffix": ["a.test"], "company": "某公司"}, {"app": "乙", "category": "社交", "suffix": ["b.test"], "company": " 某公司 "},
+                     {"app": "丙", "category": "视频", "full": ["c.test"]}, {"app": "丁", "category": "视频", "full": ["d.test"], "company": "某公司"}]})
+check(rc.label("x.a.test")["company"] == "某公司" and rc.label("b.test")["company"] == "某公司" and rc.label("c.test")["company"] is None, "company 照写的返回（前后空格去掉）；不写是 None")
+check(rc.label("d.test")["company"] == "某公司" and rc.label("d.test")["how"] == "full", "完全匹配的规则也带 company")
+check(rc.label("x.a.test")["app"] == "甲" and rc.label("b.test")["app"] == "乙", "company 不改变应用本身：应用名和类别照旧")
+for bad, why in (({"apps": [{"app": "x", "category": "c", "company": ""}]}, "空字符串"), ({"apps": [{"app": "x", "category": "c", "company": "  "}]}, "只有空格"),
+                 ({"apps": [{"app": "x", "category": "c", "company": 5}]}, "不是字符串"), ({"apps": [{"app": "x", "category": "c", "company": ["a"]}]}, "是列表")):
+    try:
+        apps.Rules().add(bad)
+        check(False, "拒绝非法 company：%s" % why)
+    except ValueError:
+        check(True, "拒绝非法 company：%s" % why)
+mine = rules({"apps": [{"app": "我的抖音", "category": "短视频", "suffix": ["douyin.com"], "company": "我的分组"}]})
+check(mine.label("www.douyin.com")["company"] == "我的分组", "自己的规则可以给任何域名写 company")
+bundled = apps.load()
+spot = {n: bundled.label(d) for n, d in (("抖音", "v26-web.douyinvod.com"), ("TikTok", "www.tiktok.com"), ("字节", "mcs.zijieapi.com"), ("YouTube", "rr3---sn-x.googlevideo.com"))}
+check([spot[k]["company"] for k in ("抖音", "TikTok", "字节")] == ["字节跳动"] * 3 and spot["YouTube"]["company"] is None, "自带规则：抖音、TikTok、字节跳动其它都是「字节跳动」；别的应用不凭印象写 company")
+check(spot["字节"]["app"] == "字节跳动其它" and spot["抖音"]["app"] == "抖音", "自带规则里这两个仍是两个应用（应用表、使用时长、流量照旧分开）")
+old_company = gen.COMPANY
+gen.COMPANY = {"甲": "某公司"}
+old = gen.APPS
+gen.APPS = [("甲", "c", ["first"]), ("乙", "c", ["main"])]
+out = gen.build(lambda n: {"first": b"a.test\n", "main": b"b.test\n"}[n])
+gen.APPS, gen.COMPANY = old, old_company
+check([a.get("company") for a in out["apps"]] == ["某公司", None], "生成脚本：COMPANY 里有的应用带 company，没有的不带这个键")
 
 print("== 事件标注与使用估计 ==")
 ev = lambda ts, name, kind="dns", st="s1": {"ts": ts, "station": st, "kind": kind, "name": name, "frame": int(ts)}       # noqa: E731

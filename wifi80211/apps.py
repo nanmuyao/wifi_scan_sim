@@ -7,7 +7,9 @@
 后缀必须落在标签边界上（notdouyin.com 不匹配 douyin.com）。同一个域名多个应用都有规则时，自己的规则优先，其次是排在前面的应用。
 
 规则文件格式（自己的规则也是这个格式，只需要 apps 一项）：
-  {"apps": [{"app": "公司内网", "category": "办公", "suffix": ["corp.example.com"], "full": ["intranet.example.net"]}]}
+  {"apps": [{"app": "公司内网", "category": "办公", "suffix": ["corp.example.com"], "full": ["intranet.example.net"], "company": "某公司"}]}
+company 可选：同一家公司运营的几个应用写同一个名字，streaming 的「持续下行」按公司合起来算（一家公司的视频常常分散在好几个应用的域名上）；
+只影响 streaming，应用表、使用时长、流量汇总仍然按应用分开。
 """
 import collections
 import json
@@ -35,6 +37,10 @@ class Rules:
         for a in doc["apps"]:
             if not isinstance(a, dict) or not a.get("app") or not a.get("category"):
                 raise ValueError("每个应用需要 app 和 category：%r" % (a,))
+            company = a.get("company")
+            if company is not None and (not isinstance(company, str) or not company.strip()):
+                raise ValueError("company 要是非空的字符串：%r" % (a,))
+            company = company.strip() if company else None
             self.apps.append((a["app"], a["category"]))
             for table, key in ((self.suffix, "suffix"), (self.full, "full")):
                 for d in a.get(key, []):
@@ -42,22 +48,22 @@ class Rules:
                     if not d or d.startswith(".") or "*" in d:
                         raise ValueError("域名不合法（不要带前导点或通配符）：%r" % (d,))
                     if priority_over_existing or d not in table:
-                        table[d] = (a["app"], a["category"])
+                        table[d] = (a["app"], a["category"], company)
 
     def label(self, name):
-        """-> {"app", "category", "how": "full" | "suffix", "rule": 命中的规则域名} 或 None。"""
+        """-> {"app", "category", "company"（没写是 None）, "how": "full" | "suffix", "rule": 命中的规则域名} 或 None。"""
         n = _norm(name)
         if not n or not isinstance(name, str):
             return None
         hit = self.full.get(n)
         if hit:
-            return {"app": hit[0], "category": hit[1], "how": "full", "rule": n}
+            return {"app": hit[0], "category": hit[1], "company": hit[2], "how": "full", "rule": n}
         labels = n.split(".")
         for i in range(len(labels)):
             cand = ".".join(labels[i:])
             hit = self.suffix.get(cand)
             if hit:
-                return {"app": hit[0], "category": hit[1], "how": "suffix", "rule": cand}
+                return {"app": hit[0], "category": hit[1], "company": hit[2], "how": "suffix", "rule": cand}
         return None
 
 

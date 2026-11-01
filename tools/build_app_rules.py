@@ -22,6 +22,10 @@ COMMIT = "c6adacf29cc4fb05e04651fcf03e00989ef9f797"                      # 2026-
 BASE = "https://raw.githubusercontent.com/%s/%s/data/" % (REPO, COMMIT)
 
 # （应用, 类别, [清单名...]）。顺序有意义：更具体的应用放在更笼统的前面（youtube 在 google 之前，primevideo 在 amazon 之前，acfun 在 kuaishou 之前）。
+# 应用 -> 公司：只写有把握的（抖音、TikTok 和「字节跳动其它」都是字节跳动运营的；v2fly 的 bytedance 清单就是字节跳动自己的域名）。
+# 别的应用不凭印象添加；自己的规则文件里可以给任何应用写 company（见 rules/README.md）。streaming 的「持续下行」按公司合起来算。
+COMPANY = {"抖音": "字节跳动", "TikTok": "字节跳动", "字节跳动其它": "字节跳动"}
+
 APPS = [
     ("抖音", "短视频", ["douyin"]),
     ("TikTok", "短视频", ["tiktok"]),
@@ -139,7 +143,10 @@ def build(getter=fetch):
                     continue
                 claimed[(kind, d)] = app
                 out.append(d)
-        apps.append({"app": app, "category": cat, "lists": lists, "suffix": mine_s, "full": mine_f})
+        entry = {"app": app, "category": cat, "lists": lists, "suffix": mine_s, "full": mine_f}
+        if app in COMPANY:
+            entry["company"] = COMPANY[app]
+        apps.append(entry)
     return {"format": 1,
             "source": {"repo": REPO, "commit": COMMIT, "license": "MIT", "files": dict(sorted(files.items()))},
             "note": "由 tools/build_app_rules.py 生成，不要手改；自己的规则写在另一个文件里（见 rules/README.md）。",

@@ -87,28 +87,35 @@ def attach_traffic(rep, agg, top=None):
 STREAM_EPISODES = 3                                                      # 每个应用在表格里列最长的几个时段
 
 
-def attach_streaming(rep, summary, params):
+def attach_streaming(rep, summary, params, unnamed=None):
     """把 streaming.summary 的结果并进报告：每台有持续下行时段的设备加 "streaming"：[{"app", "seconds", "bytes_down", "episodes": [...]}]，按合计秒数从多到少；
     rep["streaming_params"] 记下用的参数（rep["streaming"] 为 True 时表格才印这一节）。"""
     rep["streaming_params"] = dict(params)
+    unnamed = unnamed or {}
     rep["streaming"] = bool(summary)
     for d in rep["devices"]:
-        rows = [dict(app=app, seconds=v["seconds"], bytes_down=v["bytes_down"], episodes=v["episodes"])
+        rows = [dict(app=app, apps=v["apps"], seconds=v["seconds"], bytes_down=v["bytes_down"], episodes=v["episodes"])
                 for (st, app), v in summary.items() if st == d["mac"]]
         rows.sort(key=lambda r: (-r["seconds"], r["app"]))
         if rows:
             d["streaming"] = rows
+            u, t = unnamed.get(d["mac"], (0, 0))
+            d["streaming_unnamed"] = {"bytes_down": u, "total_down": t}
 
 
 def streaming_lines(d, params):
     """表格里一台设备的「持续下行」一节。"""
     out = ["  持续下行的时段（下行连续不断地在收数据；看视频是这个样子，下载、直播也是，不是结论）："]
     for r in d["streaming"]:
-        out.append("    %-24s 合计 %.1f 分钟，%d 个时段，下行 %s" % (r["app"], r["seconds"] / 60.0, len(r["episodes"]), traffic.human(r["bytes_down"])))
+        label = r["app"] if r["apps"] == [r["app"]] else "%s（%s）" % (r["app"], "、".join(r["apps"]))
+        out.append("    %-24s 合计 %.1f 分钟，%d 个时段，下行 %s" % (label, r["seconds"] / 60.0, len(r["episodes"]), traffic.human(r["bytes_down"])))
         for e in sorted(r["episodes"], key=lambda e: -e["seconds"])[:STREAM_EPISODES]:
             out.append("      %s  %4.1f 分钟  平均 %s/秒" % (iso(e["start"]), e["seconds"] / 60.0, traffic.human(e["avg_rate"])))
         if len(r["episodes"]) > STREAM_EPISODES:
             out.append("      …还有 %d 个更短的时段" % (len(r["episodes"]) - STREAM_EPISODES))
+    u = d.get("streaming_unnamed")
+    if u and u["total_down"] and u["bytes_down"]:
+        out.append("    没有名字的流（不在上面的统计里，可能漏掉了一部分）：下行 %s，占这台设备下行的 %.0f%%" % (traffic.human(u["bytes_down"]), 100.0 * u["bytes_down"] / u["total_down"]))
     return out
 
 
@@ -343,7 +350,7 @@ def _main(argv):
     attach_traffic(rep, traffic.aggregate(rules, flow_list), a.top)
     sparams = {"min_rate": int(a.stream_rate * 1000), "min_seconds": a.stream_min_seconds, "max_gap": a.stream_gap}
     sres = {k: v for k, v in streaming.summary(rules, flow_list, **sparams).items() if mac is None or k[0] == mac}
-    attach_streaming(rep, sres, sparams)
+    attach_streaming(rep, sres, sparams, streaming.unnamed_share(flow_list))
     log.info("持续下行：%d 个设备应用组合有时段，共 %d 个时段（门槛 %s/秒、至少 %g 秒、空格 %g 秒）", len(sres), sum(len(v["episodes"]) for v in sres.values()),
              traffic.human(sparams["min_rate"]), sparams["min_seconds"], sparams["max_gap"])
     log_result(rep, stats, rules, result.events, flow_list)
