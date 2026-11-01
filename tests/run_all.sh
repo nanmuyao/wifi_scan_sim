@@ -45,6 +45,8 @@ run "QUIC Initial（密钥推导、头保护、CRYPTO 重组；RFC 9001 附录 A
 run "QUIC Initial 对照 tshark（11 个数据报逐字段，8 个连接的 SNI）" python3 tests/oracle/test_quic_diff.py
 run "设备访问事件（DNS / TLS SNI、设备归属、时间线，合成帧）" python3 tests/test_activity.py
 run "设备访问事件对照 tshark（DNS 查询逐帧，设备 MAC 和名字）" python3 tests/oracle/test_activity_diff.py
+run "HTTP 请求事件对照 tshark（wpa-Induction 5 条连接 11 个请求）" python3 tests/oracle/test_http_diff.py
+run "TCP 上的 DNS 对照 tshark（6 条合成连接：拆开的长度前缀、一段两条消息、乱序）" python3 tests/oracle/test_dns_tcp_diff.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
 run "TDLS（建立帧、TPK、MIC、直连帧解密，独立构造）" python3 tests/test_tdls.py
