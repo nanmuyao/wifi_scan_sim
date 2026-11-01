@@ -465,6 +465,11 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 - **端到端对照**（`tests/oracle/test_wifi_e2e_diff.py`）：样例里没有 TLS / QUIC 流，所以合成了一个 CCMP 加密的 802.11 抓包（独立加密方），里面有 DNS、拆成两段的 TLS ClientHello、明文 HTTP、QUIC Initial，只给一把 TK，
   走完整条链（解密 -> 事件），读出的 4 个域名与 tshark 用同一把 TK 解密后读到的逐项相同。这一步还发现 `pipeline.decrypt_capture` 一直没用密钥表里的 `tk` 项（`decrypt_user_tk` 只有测试在调），
   现在补上了：没有握手也能解单播帧，`how` 标 `user_tk`。
+- **nDPI 交叉对照**（`tests/oracle/test_ndpi_diff.py`）：tshark 只认协议，不认应用；nDPI（ntopng 用的深度包检测库，开发镜像里用固定的 6.0 版本编译，`ndpiReader`）认应用。同一批合成流量（46 个名字 × TLS 的 SNI / QUIC Initial 的 SNI / 明文 HTTP 的 Host，共 138 条流），
+  先确认 nDPI 把它们识别成 TLS / QUIC / HTTP 且读到的主机名与我们放进去的逐条相同（顺带独立验证了我们的 TLS / QUIC / HTTP 构造），再比应用名：**84 条一致**（28 个名字，其中 12 个靠 11 项显式的名字对照表才算同一个，如 Github/GitHub、NetFlix/Netflix、iQIYI/爱奇艺）、
+  **48 条只有我们认得**（16 个名字：抖音、快手、哔哩哔哩、百度、小红书、京东、拼多多、美团、优酷、虎牙、斗鱼、网易、AcFun、B 站图床，加 OpenAI，nDPI 只说 TLS / QUIC / HTTP）、3 条只有 nDPI 认得（Wikipedia）、3 条都不认得（example.com）、说法真正不一样的 0 条。
+  结论：国内应用（正是你最关心的抖音、快手）nDPI 完全不认，我们的规则有；Tencent / Google / Apple / Microsoft 这类大公司，我们归整家公司，nDPI 更细（如微信域名 nDPI 归到 QQ）；两边都是按域名认的，TLS / QUIC / HTTP 结论相同。
+  所以：应用级统计用 nDPI 打底并不省事——要同时保留我们的国内应用规则；反过来 nDPI 的细分（它分得更细的国外应用）可以当我们规则的补充来源。
 - **加密 DNS**：`rules/encrypted_dns.json` 手写了 5 家公开 DoH / DoT 服务（Google、Cloudflare、Quad9、AdGuard、阿里），域名都在服务商说明页上核对过，类别「加密 DNS」；设备连这些名字时我们只能说「它的 DNS 被加密了」。
 - **还没做**：ECH 看不到；非公开的 DoH 服务器认不出；HTTP/3 之外的 UDP 协议。
 - 变异检查：`apps` 25 处，起初 4 处存活，补用例后全部抓住（剩下的是文档字符串里的字和重复的类型检查）；`dns` 12 处改动 2 处等价；`tcpstream` 15 处 3 处等价；`activity` 约 35 处，等价的有 DNS 端口检查重复（`net.describe` 已按端口判断）、1200 字节下限（`quic` 自己会拒绝）、同一连接里设备不变、找到 ClientHello 后的 `break`。
