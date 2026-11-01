@@ -165,7 +165,7 @@ env = dict(os.environ, TZ="UTC", PYTHONPATH=ROOT)
 
 
 def cli(*args):
-    p = subprocess.run([sys.executable, "-m", "wifi80211.report"] + list(args), capture_output=True, text=True, env=env, cwd=ROOT)
+    p = subprocess.run([sys.executable, "-m", "wifi80211.report", "--no-log-file"] + list(args), capture_output=True, text=True, env=env, cwd=ROOT)
     return p.returncode, p.stdout, p.stderr
 
 

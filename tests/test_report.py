@@ -111,7 +111,7 @@ def run(argv):
     out, err, so, se = io.StringIO(), io.StringIO(), sys.stdout, sys.stderr
     sys.stdout, sys.stderr = out, err
     try:
-        rc = report.main(argv)
+        rc = report.main(["--no-log-file"] + list(argv))
     finally:
         sys.stdout, sys.stderr = so, se
     return rc, out.getvalue(), err.getvalue()
@@ -168,7 +168,7 @@ env = dict(os.environ, TZ="UTC", PYTHONPATH=ROOT)
 
 
 def cli(*args):
-    p = subprocess.run([sys.executable, "-m", "wifi80211.report", sample] + list(args), capture_output=True, text=True, env=env, cwd=ROOT)
+    p = subprocess.run([sys.executable, "-m", "wifi80211.report", "--no-log-file", sample] + list(args), capture_output=True, text=True, env=env, cwd=ROOT)
     return p.returncode, p.stdout, p.stderr
 
 
