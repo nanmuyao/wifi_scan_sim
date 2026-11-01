@@ -7,7 +7,11 @@ QoS Control 的 bit7（A-MSDU Present）置位时，帧体是一串子帧：
 最后一个子帧后面没有填充。
 受保护的帧体是密文，要解密之后才能按这个格式读（阶段 D）。
 """
+import logging
 
+from . import logs
+
+log = logging.getLogger(__name__)
 SUBFRAME_HEADER = 14
 
 
@@ -26,13 +30,18 @@ def parse(body):
     while p < n:
         if p + SUBFRAME_HEADER > n:
             truncated = any(body[p:])
+            if truncated:
+                logs.trace(log, "A-MSDU 在偏移 %d 处剩 %d 字节不足子帧头，且不全是填充", p, n - p)
             break
         length = body[p + 12] << 8 | body[p + 13]
         end = p + SUBFRAME_HEADER + length
         cut = end > n
         subs.append({"da": mac_str(body[p:p + 6]), "sa": mac_str(body[p + 6:p + 12]), "length": length,
                      "payload": bytes(body[p + SUBFRAME_HEADER:min(end, n)]), "truncated": cut})
+        if length == 0:
+            logs.trace(log, "A-MSDU 偏移 %d 的子帧长度为 0，照常算一个子帧", p)
         if cut:
+            logs.trace(log, "A-MSDU 偏移 %d 的子帧声明 %d 字节，只剩 %d 字节", p, length, n - p - SUBFRAME_HEADER)
             truncated = True
             break
         p = end + (-(SUBFRAME_HEADER + length)) % 4

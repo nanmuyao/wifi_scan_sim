@@ -55,6 +55,7 @@ run "明文抓包整条链对照 tshark（以太网与两种 cooked：4 个域�
 run "流量统计（每条流的包数 / 字节 / 名字、按应用汇总、并进报告）" python3 tests/test_traffic.py
 run "流量统计对照 tshark（14 个样例 102 条流上下行包数和字节逐流相同）" python3 tests/oracle/test_traffic_diff.py
 run "密钥文件与一条命令出报告（解析、汇总、三种格式、退出码、wpa-Induction 上的 CLI）" python3 tests/test_report.py
+run "帧层日志（抓包文件 / radiotap / 帧汇总 / 网络信息 / 握手缺失提示，手写小抓包 + 24 个样例）" python3 tests/test_log_frames.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
 run "TDLS（建立帧、TPK、MIC、直连帧解密，独立构造）" python3 tests/test_tdls.py

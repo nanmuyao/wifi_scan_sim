@@ -9,6 +9,11 @@ Action 帧体（管理帧子类型 13 / 14）。纯标准库。
 这里解码：Block Ack（类别 3：ADDBA 请求 / 响应、DELBA）和 High Throughput（类别 7：通知信道宽度、SM 省电）。
 其余类别只给出类别名、动作码和原始内容。
 """
+import logging
+
+from . import logs
+
+log = logging.getLogger(__name__)
 
 # 类别名称沿用 Wireshark 的写法（tests/oracle/test_action_names.py 与 tshark 的值表逐项对照）
 CATEGORY_NAMES = {
@@ -64,6 +69,7 @@ def decode_action(body):
     """Action 帧体 -> dict；不足 2 字节返回 None。键：category（低 7 位）、error_response、category_name、code、payload（动作码之后的原始字节）、
     details（已解码的内容，或 None）。"""
     if len(body) < 2:
+        logs.trace(log, "Action 帧体只有 %d 字节（至少 2：类别 + 动作码）", len(body))
         return None
     raw = body[0]
     cat = raw & 0x7F
@@ -74,5 +80,9 @@ def decode_action(body):
         details = decode_block_ack(code, payload)
     elif cat == CAT_HT:
         details = decode_ht(code, payload)
+    if cat not in CATEGORY_NAMES:
+        logs.trace(log, "不认识的 Action 类别 %d（动作码 %d），只给原始内容", cat, code)
+    elif details is None and cat in (CAT_BLOCK_ACK, CAT_HT):
+        logs.trace(log, "Action 类别 %d 动作码 %d 的内容解不出（长度 %d），只给原始内容", cat, code, len(payload))
     return {"category_raw": raw, "category": cat, "error_response": bool(raw & 0x80),
             "category_name": CATEGORY_NAMES.get(cat), "code": code, "payload": payload, "details": details}

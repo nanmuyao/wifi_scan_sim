@@ -6,8 +6,12 @@
 walk() 按出现顺序返回全部元素（同一 ID 可以出现多次，例如多个厂商元素），不丢弃、不合并；
 元素的长度超过剩余字节时，已读到的保留，并报告 truncated。
 """
+import logging
 from collections import namedtuple
 
+from . import logs
+
+log = logging.getLogger(__name__)
 Element = namedtuple("Element", "id ext data offset")      # ext：扩展元素的扩展 ID，否则 None
 
 ID_EXTENSION = 255
@@ -32,9 +36,11 @@ def walk(buf):
     els, p, n = [], 0, len(buf)
     while p < n:
         if p + 2 > n:
+            logs.trace(log, "元素列表在偏移 %d 被截断：只剩 1 个字节，连长度都没有", p)
             return els, True                       # 只剩 1 个字节：连长度都没有
         eid, length = buf[p], buf[p + 1]
         if p + 2 + length > n:
+            logs.trace(log, "元素 %d 在偏移 %d 被截断：声明 %d 字节，只剩 %d 字节", eid, p, length, n - p - 2)
             return els, True                       # 长度超过剩余字节
         data = buf[p + 2:p + 2 + length]
         ext = None
@@ -187,6 +193,17 @@ def _suite(b):
     return (b[0] << 16 | b[1] << 8 | b[2], b[3])
 
 
+# AKM（认证与密钥管理）套件类型号（OUI 00-0f-ac）-> 名字；日志里用它说明网络是 WPA2-PSK 还是 WPA3-SAE（SAE 的口令不能离线推出 PMK）
+AKM_NAMES = {1: "802.1X", 2: "PSK", 3: "FT-802.1X", 4: "FT-PSK", 5: "802.1X-SHA256", 6: "PSK-SHA256", 8: "SAE", 9: "FT-SAE", 11: "Suite-B", 12: "Suite-B-192",
+             18: "OWE", 24: "SAE-EXT-KEY", 25: "FT-SAE-EXT-KEY"}
+
+
+def akm_name(suite):
+    """(oui, 类型) -> 名字；不是 IEEE 802.11 的 OUI 或不认识的类型写成 OUI-类型。"""
+    oui, typ = suite
+    return AKM_NAMES.get(typ, "类型%d" % typ) if oui == 0x000FAC else "%06x-%d" % (oui, typ)
+
+
 # RSN 能力位（16 位小端）
 RSN_CAPS = {"preauth": 0, "no_pairwise": 1, "mfpr": 6, "mfpc": 7, "joint_multi_band": 8, "peerkey": 9,
             "ocvc": 12, "extended_key_id": 13}
@@ -200,6 +217,7 @@ def decode_rsn(d):
     不足版本号 2 字节时返回 None。"""
     n = len(d)
     if n < 2:
+        logs.trace(log, "RSN 元素只有 %d 字节，不足版本号", n)
         return None
     out = {"version": d[0] | d[1] << 8, "group": None, "pairwise": None, "akm": None,
            "caps": None, "pmkids": None, "group_mgmt": None, "ptksa_replay": None, "gtksa_replay": None,
@@ -215,6 +233,7 @@ def decode_rsn(d):
             cnt = d[p] | d[p + 1] << 8
             p += 2
             if p + 4 * cnt > n:
+                logs.trace(log, "RSN 元素损坏：%s 列表声明 %d 项，只剩 %d 字节", key, cnt, n - p)
                 out["malformed"] = True
                 return out
             out[key] = [_suite(d[p + 4 * i:p + 4 * i + 4]) for i in range(cnt)]
@@ -230,6 +249,7 @@ def decode_rsn(d):
                 cnt = d[p] | d[p + 1] << 8
                 p += 2
                 if p + 16 * cnt > n:
+                    logs.trace(log, "RSN 元素损坏：PMKID 列表声明 %d 项，只剩 %d 字节", cnt, n - p)
                     out["malformed"] = True
                     return out
                 out["pmkids"] = [bytes(d[p + 16 * i:p + 16 * i + 16]) for i in range(cnt)]
@@ -555,12 +575,16 @@ def decode_all(els):
             r = spec[1](e.data)
             if r is not None:
                 out[spec[0]] = r
+            else:
+                logs.trace(log, "扩展元素 %d（%s）数据不合规，已忽略", e.ext, spec[0])
     for e in els:
         spec = DECODERS.get(e.id)            # 扩展元素的 ID 是 255，不在这张表里
         if spec and spec[0] not in out:
             r = spec[1](e.data)
             if r is not None:
                 out[spec[0]] = r
+            else:
+                logs.trace(log, "元素 %d（%s）数据不合规，已忽略", e.id, spec[0])
     vs = vendor_elements(els)
     out["vendors"] = vs                      # 全部厂商元素，按出现顺序
     for key in ("wmm", "wpa"):               # WMM / WPA 取第一个
