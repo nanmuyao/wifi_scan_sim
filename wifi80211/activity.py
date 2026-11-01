@@ -89,6 +89,9 @@ def station_of(h):
     return None
 
 
+BIN_SECONDS = 5                                                      # 流量按多少秒一格记（flow_bins）；改它要同步 streaming.py 的参数含义
+
+
 class Collector:
     """逐个 MSDU 喂进来（feed），最后 finish() 得到事件；同时按流累计包数和字节（flow_stats），记下每条连接认出的名字（names）和 DNS 应答里的 IP -> 域名（answers），给 traffic 用。
     802.11 的 build 和明文以太网的 plain.analyze 共用它：区别只是「这个 MSDU 属于哪台设备、是不是设备发出的」怎么定。"""
@@ -100,6 +103,7 @@ class Collector:
         self.udp = {}                                                # (设备, 源 IP, 源端口, 目的 IP, 目的端口) -> {"ts", "frame", "datagrams": [...]}：可能是 QUIC Initial 的数据报
         self.answers = {}                                            # (设备, 服务器 IP) -> 设备查过的域名（最近一次）
         self.flow_stats = {}                                         # (设备, 协议, 设备 IP, 设备端口, 对端 IP, 对端端口) -> 包数 / L3 字节（上下行）/ 首末时间
+        self.flow_bins = {}                                          # 同样的键 -> {第几格（时间 // BIN_SECONDS）: [上行字节, 下行字节]}，给 streaming 找「持续下行」的时段
         self.names = {}                                              # (设备, 协议, 客户端 IP, 客户端端口, 服务器 IP, 服务器端口) -> (名字, 来源 via, 事件种类)
         self.stats = collections.Counter()                           # 诊断用的计数（finish 时写进日志）：msdu / unparsed / no_device / bad_checksum / fragment / dns_malformed
         self.stacks = collections.Counter()                          # 协议层组合 -> 个数
@@ -114,6 +118,13 @@ class Collector:
         a["packets_up" if up else "packets_down"] += 1
         a["bytes_up" if up else "bytes_down"] += length
         a["first"], a["last"] = min(a["first"], ts), max(a["last"], ts)
+        bins = self.flow_bins.get(key)
+        if bins is None:
+            bins = self.flow_bins[key] = {}
+        cell = bins.get(int(ts // BIN_SECONDS))
+        if cell is None:
+            cell = bins[int(ts // BIN_SECONDS)] = [0, 0]
+        cell[0 if up else 1] += length
 
     def feed(self, n, ts, st, msdus, up=None):
         """n：帧 / 包号；ts：时间；st：设备（None 不算）；msdus：[LLC/SNAP 开头的字节]；up：True 设备发出的、False 发给设备的、None 不清楚（不计流量）。"""

@@ -69,6 +69,8 @@ run "密钥推导原语（CMAC / 密钥包装 / PRF / KDF）" python3 tests/test
 run "加密原语（CCM / GCM / RC4 / WEP / TKIP / Michael）" python3 tests/test_crypto80211.py
 run "提速改动的等价性（CTR 批量密钥流、异或、AES 对象复用、mac_str 缓存、iter_frames 收读好的抓包）" python3 tests/test_speedups.py
 run "抓包脚本 tools/capture_monitor.sh（参数检查、命令顺序、出错和 Ctrl-C 时恢复网卡；假命令，没在真实网卡上跑过）" python3 tests/test_capture_script.py
+run "持续下行的时段（streaming：格子、空格、最短时长、按应用合并；默认参数未标定）" python3 tests/test_streaming.py
+run "流量的时间格子对照 tshark（24 个样例，每条流每一格的上下行字节）" python3 tests/oracle/test_flow_bins_diff.py
 run "解密标准答案（tshark 用公开密钥解出的明文）" python3 tests/oracle/test_decrypt_oracle.py
 run "A-MSDU 子帧" python3 tests/test_amsdu.py
 run "Action 帧解码" python3 tests/test_action.py

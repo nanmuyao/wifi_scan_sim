@@ -13,10 +13,11 @@ log = logging.getLogger(__name__)
 UNNAMED = "未命名"
 
 
-def flows(result):
+def flows(result, with_bins=False):
     """result：activity.analyze / plain.analyze 的结果 -> 流的列表，按首次出现时间排序：
     {"station", "proto", "local", "remote"（"IP:端口" 字符串之外另给 local_ip / local_port / remote_ip / remote_port）, "packets_up", "packets_down", "bytes_up", "bytes_down", "first", "last",
      "name"（认出的名字，没有是 None）, "via"（sni / host / dns / ip / None）, "kind"（tls / http / quic / dot / dns / None）}。
+    with_bins=True 时每条流另带 "bins"：{第几格（时间 // activity.BIN_SECONDS）: [上行字节, 下行字节]}，给 streaming 用。
     名字先看这条连接自己的 SNI / Host（客户端口要对得上），没有再看设备自己 DNS 应答里这个 IP 的域名；都没有就是 None，不猜。"""
     out = []
     for (st, proto, lip, lport, rip, rport), a in result.flow_stats.items():
@@ -26,7 +27,10 @@ def flows(result):
         else:
             name = result.answers.get((st, rip))
             via, kind = ("dns", "dns") if name else (None, None)
-        out.append(dict(a, station=st, proto=proto, local_ip=lip, local_port=lport, remote_ip=rip, remote_port=rport, name=name, via=via, kind=kind))
+        f = dict(a, station=st, proto=proto, local_ip=lip, local_port=lport, remote_ip=rip, remote_port=rport, name=name, via=via, kind=kind)
+        if with_bins:
+            f["bins"] = result.flow_bins.get((st, proto, lip, lport, rip, rport), {})
+        out.append(f)
     out.sort(key=lambda f: (f["first"], f["station"], f["local_port"], f["remote_ip"]))
     return out
 
