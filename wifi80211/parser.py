@@ -16,6 +16,7 @@ scapy 仅用于【生成】标准测试帧；解析路径完全是手写字节�
   python3 wifi_frame_parser.py
 """
 
+import logging
 import struct
 import zlib
 
@@ -23,7 +24,10 @@ from . import action
 from . import amsdu
 from . import capture
 from . import ie
+from . import logs
 from . import radiotap
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # 802.11 帧类型/子类型查表
@@ -93,6 +97,7 @@ def parse_mac_header(buf):
 
     另外给出按 ToDS / FromDS 对应出来的 da、sa、bssid（4 地址帧没有 bssid）。"""
     if len(buf) < 24:
+        logs.trace(log, "MAC 头过短：%d 字节（至少 24）", len(buf))
         raise ValueError("MAC header too short: %d" % len(buf))
     fc, duration = struct.unpack("<HH", buf[0:4])
     addr1 = mac_str(buf[4:10])
@@ -116,6 +121,7 @@ def parse_mac_header(buf):
     has_htc = bool(f["order"]) and (has_qos or f["type"] == 0)
     need = off + (2 if has_qos else 0) + (4 if has_htc else 0)
     if len(buf) < need:
+        logs.trace(log, "MAC 头过短：%d 字节，这个帧的头需要 %d（QoS / 第四地址 / HT Control 使头变长）", len(buf), need)
         raise ValueError("MAC header too short: %d < %d" % (len(buf), need))
     if is_data and f["to_ds"] and f["from_ds"]:
         hdr["addr4"] = mac_str(buf[24:30])

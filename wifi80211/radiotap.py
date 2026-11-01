@@ -13,7 +13,11 @@ parse(buf) 返回 dict：
     其余键         按字段名（见 FIELDS）；有多个值的字段（多天线）放第一个，全部在 "<名字>_all"
 遇到不认识的字段位时停止解析（后面的字段位置无法知道），已解析出的照常返回，"stopped_at" 说明停在哪一位。
 """
+import logging
 import struct
+from collections import Counter
+
+log = logging.getLogger(__name__)
 
 # 位号 -> (名字, 对齐, 大小, struct 格式, 子字段名)
 FIELDS = {
@@ -181,3 +185,84 @@ def data_rate_mbps(rt):
     if m:
         return ht_rate_mbps(m["known"], m["flags"], m["index"])
     return None
+
+
+# ---- 整个抓包的 radiotap 汇总（给日志用）----
+META_KEYS = ("length", "present", "fcs_included", "stopped_at")
+
+
+def channel_name(freq):
+    """频率（MHz）-> 「2437 MHz（2.4G 6 信道）」。认不出的频段只写频率。"""
+    if 2412 <= freq <= 2472 and (freq - 2407) % 5 == 0:
+        return "%d MHz（2.4G %d 信道）" % (freq, (freq - 2407) // 5)
+    if freq == 2484:
+        return "2484 MHz（2.4G 14 信道）"
+    if 5160 <= freq <= 5885 and freq % 5 == 0:
+        return "%d MHz（5G %d 信道）" % (freq, (freq - 5000) // 5)
+    if 5955 <= freq <= 7115 and (freq - 5950) % 5 == 0:
+        return "%d MHz（6G %d 信道）" % (freq, (freq - 5950) // 5)
+    return "%d MHz" % freq
+
+
+class Summary:
+    """逐包 add() 累计，抓包读完后 log_to() 一次性写日志：出现了哪些字段、信道分布、信号范围、FCS、物理层类型、解析中途停下的包、radiotap 头坏掉的原因。
+    不逐包写日志（一个抓包有几十万个包）。"""
+
+    def __init__(self):
+        self.n = 0
+        self.fields = Counter()
+        self.channels = Counter()
+        self.phy = Counter()
+        self.stopped = Counter()
+        self.errors = Counter()
+        self.fcs = 0
+        self.sig_min = self.sig_max = None
+        self.sig_sum = self.sig_n = 0
+
+    def add(self, rt):
+        self.n += 1
+        for k in rt:
+            if k not in META_KEYS and not k.endswith("_all"):
+                self.fields[k] += 1
+        ch = rt.get("channel")
+        if ch:
+            self.channels[ch["freq"]] += 1
+        self.fcs += rt["fcs_included"]
+        for k in ("he", "vht", "mcs"):
+            if k in rt:
+                self.phy[k] += 1
+                break
+        else:
+            self.phy["legacy"] += 1
+        if "stopped_at" in rt:
+            self.stopped[rt["stopped_at"]] += 1
+        sig = rt.get("antsignal")
+        if sig is not None:
+            self.sig_min = sig if self.sig_min is None else min(self.sig_min, sig)
+            self.sig_max = sig if self.sig_max is None else max(self.sig_max, sig)
+            self.sig_sum += sig
+            self.sig_n += 1
+
+    def error(self, exc):
+        self.errors[str(exc).split(":")[0].split("（")[0]] += 1
+
+    def log_to(self, logger):
+        if not self.n and not self.errors:
+            return
+        logger.info("radiotap：%d 个包的头可读，字段（出现的包数）：%s", self.n, "，".join("%s %d" % kv for kv in self.fields.most_common()) or "（没有字段）")
+        if self.channels:
+            logger.info("信道分布：%s", "；".join("%s %d 个包" % (channel_name(f), c) for f, c in self.channels.most_common()))
+        else:
+            logger.warning("radiotap 里没有信道字段：看不出抓包网卡听的是哪个信道")
+        if len(self.channels) > 1:
+            logger.warning("抓包里有 %d 个信道的帧：监听网卡在换信道或同时听到了相邻信道，同一个设备的握手和数据可能分散在不同信道、漏掉一部分；"
+                           "单信道监听只能完整听到它停留的那个信道（先查路由器用哪个信道，把网卡固定在该信道再抓）", len(self.channels))
+        if self.sig_n:
+            logger.info("信号强度：%d 到 %d dBm，平均 %.0f dBm（越接近 0 越强；低于 -80 的帧容易丢）", self.sig_min, self.sig_max, self.sig_sum / self.sig_n)
+        logger.info("FCS：%s", "%d / %d 个包带 FCS（可校验帧是否损坏）" % (self.fcs, self.n) if self.fcs else "radiotap flags 里没有 FCS 位，帧末尾不带 FCS，没法校验帧是否损坏")
+        logger.info("物理层：%s", "，".join("%s %d" % kv for kv in self.phy.most_common()))
+        if self.stopped:
+            logger.warning("%d 个包的 radiotap 遇到不认识的字段位而停止解析（%s），那之后的字段（可能含信道、信号）没读到",
+                           sum(self.stopped.values()), dict(self.stopped))
+        if self.errors:
+            logger.warning("%d 个包的 radiotap 头坏了，这些包被跳过：%s", sum(self.errors.values()), dict(self.errors))
