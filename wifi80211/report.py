@@ -12,10 +12,12 @@ import csv
 import datetime
 import io
 import json
+import logging
+import os
 import re
 import sys
 
-from . import activity, apps, capture, frames, keyfile, pipeline, plain, traffic
+from . import activity, apps, capture, frames, keyfile, logs, pipeline, plain, traffic
 
 LIMITS = "注意：使用时长是从网络活动推出的估计，不是屏幕使用时间；DoH / DoT / ECH 加密的访问看不到，只能看见明文 DNS、TLS 的 SNI 和 QUIC 的 SNI。"
 TRAFFIC_NOTE = "流量 = 抓到的 IP 包的字节（含 IP / TCP / UDP 头和重传），不是应用层数据量；名字来自这条连接的 SNI / Host，或这台设备 DNS 应答里的 IP -> 域名。"
@@ -135,7 +137,54 @@ def render_csv(rep, stats):
 RENDER = {"table": render_table, "json": render_json, "csv": render_csv}
 
 
+log = logging.getLogger("wifi80211.report")                      # 不用 __name__：python -m 运行时它是 __main__，就不在 wifi80211 的日志树里了
+EXIT_INTERNAL = 70
+
+
 def main(argv=None):
+    """命令行入口：装好日志，再跑 _main；没料到的异常写进日志并给出日志路径，退出码 70。"""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    path = logs_setup(argv)
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        log.warning("被中断")
+        return 130
+    except Exception:                                                            # noqa: BLE001 —— 最外层兜底，目的就是记下来
+        log.exception("内部错误")
+        print("内部错误（不是你的用法问题）。日志：%s" % (path or "没有写日志文件，请加 --log-file 重跑"), file=sys.stderr)
+        return EXIT_INTERNAL
+
+
+def note(level, msg):
+    """给人看的提示：写进日志，也打到屏幕（stderr）。"""
+    log.log(level, "%s", msg)
+    print(msg, file=sys.stderr)
+
+
+def logs_setup(argv):
+    """只看日志相关的几个参数（完整的解析在 _main 里）。返回日志文件路径或 None。"""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("--log-level", choices=sorted(logs.LEVELS), default="warning")
+    p.add_argument("--log-file")
+    p.add_argument("--no-log-file", action="store_true")
+    p.add_argument("--redact", action="store_true")
+    a, _ = p.parse_known_args(argv)
+    path = None if a.no_log_file else (a.log_file or logs.default_log_path())
+    try:
+        logs.setup(a.log_level, path, a.redact)
+    except OSError as e:
+        logs.setup(a.log_level, None, a.redact)
+        log.warning("日志文件写不了（%s），只输出到屏幕", e)
+        path = None
+    inputs = [x for x in argv if not x.startswith("-") and os.path.exists(x)]
+    logs.run_header(log, argv, inputs)
+    if path:
+        print("日志文件：%s" % path, file=sys.stderr)
+    return path
+
+
+def _main(argv):
     p = argparse.ArgumentParser(prog="python3 -m wifi80211.report", description="解密抓包并报告每台设备访问了什么（只用于自己的网络）。")
     p.add_argument("capture", help="抓包文件（pcap / pcapng，可以是 .gz）")
     p.add_argument("--keys", metavar="FILE", help="密钥文件（Wireshark 的 \"类型\",\"值\" 格式，见 wifi80211/keyfile.py）；802.11 抓包必须给，以太网 / cooked 抓包不需要")
@@ -145,12 +194,16 @@ def main(argv=None):
     p.add_argument("--unmatched", type=int, default=15, metavar="N", help="每台设备列出没有规则的域名前 N 个（默认 15）")
     p.add_argument("--device", metavar="MAC", help="只看这台设备")
     p.add_argument("--min-events", type=int, default=1, metavar="N", help="事件数少于 N 的设备不显示")
+    p.add_argument("--log-level", choices=sorted(logs.LEVELS), default="warning", help="屏幕上的日志级别（默认 warning；日志文件固定记到 debug，trace 才逐帧）")
+    p.add_argument("--log-file", metavar="FILE", help="日志文件（默认当前目录的 wifi80211-时间.log）")
+    p.add_argument("--no-log-file", action="store_true", help="不写日志文件")
+    p.add_argument("--redact", action="store_true", help="日志里的 MAC、IP、域名换成短标记（要把日志发给别人之前用；报告本身不受影响）")
     p.add_argument("--top", type=int, metavar="N", help="每台设备的应用表按流量取前 N 个，其它流量也只留前 N 个（不给：应用按估计秒数排序，其它流量留 10 个）")
     try:
         a = p.parse_args(argv)
     except SystemExit as e:
         return EXIT_USAGE if e.code else 0
-    err = lambda m: (print("错误：" + m, file=sys.stderr), EXIT_USAGE)[1]               # noqa: E731
+    err = lambda m: (log.error("%s", m), print("错误：" + m, file=sys.stderr), EXIT_USAGE)[2]               # noqa: E731
     if a.gap <= 0 or a.unmatched < 0 or a.min_events < 0 or (a.top is not None and a.top < 0):
         return err("--gap 要大于 0，--unmatched、--min-events 和 --top 不能是负数")
     mac = None
@@ -179,7 +232,7 @@ def main(argv=None):
         return err("抓包文件 %s 的链路类型不支持（认 802.11 / radiotap、以太网、Linux cooked）" % a.capture)
     if mode == "plain":
         if keys:
-            print("提示：这是明文抓包（以太网 / cooked），不需要密钥，--keys 被忽略。", file=sys.stderr)
+            note(logging.WARNING, "提示：这是明文抓包（以太网 / cooked），不需要密钥，--keys 被忽略。")
         result = plain.analyze(plain.iter_packets(cap))
         stats = {"frames": len(cap.packets), "protected": 0, "decrypted": 0, "mode": "plain"}
     else:
@@ -190,11 +243,11 @@ def main(argv=None):
         dec = pipeline.decrypt_capture(fr, keys)
         stats = {"frames": len(fr), "protected": protected, "decrypted": len(dec), "mode": "dot11"}
         if protected and not dec:
-            print("错误：抓包里有 %d 个受保护的数据帧，一个也没解开。读到的密钥：%s。多半是口令或 SSID 不对，或者没有抓到完整的四次握手（要抓到设备连接的那一刻）。" %
-                  (protected, "，".join("%s %d 把" % kv for kv in keyfile.summary(keys).items())), file=sys.stderr)
+            note(logging.ERROR, "错误：抓包里有 %d 个受保护的数据帧，一个也没解开。读到的密钥：%s。多半是口令或 SSID 不对，或者没有抓到完整的四次握手（要抓到设备连接的那一刻）。" %
+                 (protected, "，".join("%s %d 把" % kv for kv in keyfile.summary(keys).items())))
             return EXIT_NO_DECRYPT
         if not protected:
-            print("提示：抓包里没有受保护的数据帧（没抓到数据，或者是开放网络——开放网络的明文暂不支持）。", file=sys.stderr)
+            note(logging.WARNING, "提示：抓包里没有受保护的数据帧（没抓到数据，或者是开放网络——开放网络的明文暂不支持）。")
         result = activity.analyze(fr, dec)
     rep = build(result.events, rules, a.gap, mac, a.min_events, a.unmatched)
     attach_traffic(rep, traffic.aggregate(rules, traffic.flows(result)), a.top)

@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 tests/oracle/samples/
 tests/oracle/samples_extras/
+wifi80211-*.log

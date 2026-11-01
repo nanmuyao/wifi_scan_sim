@@ -13,5 +13,11 @@ wifi80211：802.11 帧的解析、解密与密钥推导（纯标准库，Python 
   plain / traffic                         明文抓包（以太网 / Linux cooked）读成包并认设备；每台设备每条流的包数和字节、按应用汇总
   activity / apps                         把以上读出的 DNS 查询和 SNI 按设备（MAC）汇总成事件和访问时间线；域名归到应用（rules/apps.json）并估计使用时长
 
+  logs                                    日志：setup() 装处理器、遮密钥、--redact、运行头（规范见 docs/日志规范.md）
+
 用法：from wifi80211 import pipeline；pipeline.decrypt_capture(frames, keys)（见 docs/architecture 和路线图）。
 """
+import logging
+
+__version__ = "0.1.0"
+logging.getLogger(__name__).addHandler(logging.NullHandler())          # 库本身不配置日志；命令行用 logs.setup()
