@@ -102,7 +102,7 @@ tcpdump / tshark 抓包 → all.pcap（先让一台设备断开重连，抓到�
 
 ## 七、与 wifi_scan_sim 的关系与建议顺序
 
-1. **已完成（零成本、纯软件）**：阶段 A–H，全套 66 个测试通过，`v0.1.0` 已打 tag。详见 `docs/技术路线.md` 和 `docs/wifi_scan_sim_roadmap_v3.md`。
+1. **已完成（零成本、纯软件）**：阶段 A–H，全套 71 个测试通过，`v0.2.0` 已打 tag。详见 `docs/技术路线.md` 和 `docs/wifi_scan_sim_roadmap_v3.md`。
 2. **下一步**：买监听网卡 + 准备一台 Linux 机器，抓第一份真实数据，用 `python3 -m wifi80211.report` 出报告；报告里没认出的域名（`apps.unmatched`）补进自己的规则。
 3. **之后**：按需要做路线 A，拿到应用级和流量级的完整统计。
 

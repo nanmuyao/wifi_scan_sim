@@ -19,5 +19,5 @@ wifi80211：802.11 帧的解析、解密与密钥推导（纯标准库，Python 
 """
 import logging
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 logging.getLogger(__name__).addHandler(logging.NullHandler())          # 库本身不配置日志；命令行用 logs.setup()
