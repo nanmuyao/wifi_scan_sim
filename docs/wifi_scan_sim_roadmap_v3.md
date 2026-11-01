@@ -450,8 +450,12 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 - **H5 访问时间线**（`activity.py`）：每个解密后的数据帧归到设备（发往 AP 的取源地址，AP 发来的取目的地址；AP 转发的组播副本、WDS、IBSS 不归任何设备），
   产生 dns / mdns / tls / quic 事件；没有 SNI 时用这台设备自己先前 DNS 应答里的 IP -> 域名补名字（`via` 标 dns）；`sessions` 按间隔合并，`summary` 按设备统计。
   wpa-Induction 里设备发出的 17 个 DNS / mDNS 查询（1 台设备、13 个不同名字）帧号、MAC、名字与 tshark 逐帧一致。
-- **还没做**：H6 域名到应用的映射（要一份有来源的、可替换的规则文件，由你定）；DoH / DoT 与 ECH 看不到，只能标「疑似加密」；TCP 上的 DNS（53 端口的 TCP 流）；HTTP/3 之外的 UDP 协议。
-- 变异检查：`dns` 12 处改动 2 处等价；`tcpstream` 15 处 3 处等价；`activity` 约 35 处，等价的有 DNS 端口检查重复（`net.describe` 已按端口判断）、1200 字节下限（`quic` 自己会拒绝）、同一连接里设备不变、找到 ClientHello 后的 `break`。
+- **H6 域名到应用**（`apps.py`、`rules/apps.json`、`tools/build_app_rules.py`）：规则不手写，从 v2fly/domain-list-community（MIT）的固定提交（2026-10-09）下载 145 个清单文件（逐个核对 sha256），
+  按脚本里的应用表归到 44 个应用 / 类别，生成 `rules/apps.json`（7049 条后缀、702 条完全匹配；广告 / 统计域名 420 条、关键字 / 正则 12 条跳过；同一域名被多个应用收录的 475 处按表里的顺序先到先得）。
+  匹配：完全匹配优先，再从最长的后缀找起，必须落在标签边界上；自己的规则文件优先于自带的（`apps.load("my.json")`）。`annotate` 给事件标应用，`usage` 估计每台设备每个应用的使用段数和时长
+  （相邻不超过 gap 秒算一段；这是网络活动推出的估计，不是屏幕时间），`unmatched` 列出没规则的常见域名，拿来补自己的规则。归属偏粗是事实：腾讯、Google、Apple、Microsoft 是整家公司的归类，CDN 与 SDK 域名共用。
+- **还没做**：DoH / DoT 与 ECH 看不到，只能标「疑似加密」；HTTP/3 之外的 UDP 协议。
+- 变异检查：`apps` 25 处，起初 4 处存活，补用例后全部抓住（剩下的是文档字符串里的字和重复的类型检查）；`dns` 12 处改动 2 处等价；`tcpstream` 15 处 3 处等价；`activity` 约 35 处，等价的有 DNS 端口检查重复（`net.describe` 已按端口判断）、1200 字节下限（`quic` 自己会拒绝）、同一连接里设备不变、找到 ClientHello 后的 `break`。
 
 ## 4. 完成度矩阵（每阶段结束更新）
 
@@ -472,7 +476,7 @@ FTE 的 MIC = AES-128-CMAC(TPK-KCK, 发起方 ‖ 响应方 ‖ 序号(Response 
 | Extended Key ID | G | `wpa_ptk_extended_key_id` | **已完成**（新旧两把 PTK 靠 MIC 区分） |
 | 解密后的内容（ARP / IP / UDP / TCP / ICMP / DHCP）与校验和 | F | 全部 | **已完成**：1301 个数据帧，校验和全部吻合（13 个测试图案的 ICMP 例外，tshark 同报 Bad） |
 | Mesh 元素（Mesh ID、Mesh Configuration） | G | 无样例 | **已完成**，用 26 个合成帧逐字段对照 tshark（每一位单独变化）；Mesh 对等管理 / 认证（AMPE）没做，无样例也无合成参照 |
-| 解密后认出访问了什么（DNS / mDNS、TCP 重组、TLS SNI、QUIC Initial、按设备的时间线） | H | `wpa-Induction` 等 3 个样例；TLS / QUIC 用公开向量和合成流 | **已完成**（H1–H5）；样例里没有 TLS / QUIC 流，真实抓包验证等监听网卡；域名到应用的映射（H6）待定 |
+| 解密后认出访问了什么（DNS / mDNS、TCP 重组、TLS SNI、QUIC Initial、按设备的时间线） | H | `wpa-Induction` 等 3 个样例；TLS / QUIC 用公开向量和合成流 | **已完成**（H1–H6）；样例里没有 TLS / QUIC 流，真实抓包验证等监听网卡；域名到应用的映射（H6）规则来自 v2fly 公开清单 |
 | 包 `wifi80211/` | — | — | **已完成**（模块列表见 `wifi80211/__init__.py`；`wpa2_handshake.py` 是早期实现，保留作历史） |
 
 ## 5. 硬件怎么看（给不熟悉硬件的读者）
