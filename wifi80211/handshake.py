@@ -11,6 +11,7 @@ M2 里的元素告诉我们认证方式（AKM）和成对密码套件，于是�
 """
 import hashlib
 import hmac
+import logging
 from collections import namedtuple
 
 from . import crypto  # noqa: F401  (保证 kdf80211 的依赖可导入)
@@ -20,6 +21,9 @@ from . import ft as ft80211
 from . import frames as fr
 from . import ie
 from . import kdf as kdf80211
+from . import logs
+
+log = logging.getLogger(__name__)
 
 PAIRWISE_LABEL = b"Pairwise key expansion"
 OUI_IEEE, OUI_MS = 0x000FAC, 0x0050F2
@@ -176,20 +180,59 @@ def _decrypted_eapol(done, f, mld=None):
     return pt[8:]
 
 
-def track(frames, keys):
-    """frames：frames80211.iter_frames 的结果（列表）。返回 (成功的握手 [Handshake], 失败 / 跳过的 [(帧号, 原因)])。"""
+def _new_pair():
+    return {"ssid": None, "msgs": {1: [], 2: [], 3: [], 4: []}, "verified": 0, "mic_fail": 0, "no_candidates": 0, "candidates": 0, "other": []}
+
+
+def pair_state(rec):
+    """一对 (AP, 设备) 的握手状态码：verified / mic_mismatch / no_candidates / only_m1 / m2_without_m1 / unsupported / incomplete。"""
+    if rec["verified"]:
+        return "verified"
+    if rec["mic_fail"]:
+        return "mic_mismatch"
+    if rec["no_candidates"]:
+        return "no_candidates"
+    if rec["other"]:
+        return "unsupported" if any(o.startswith("unsupported") for o in rec["other"]) else "m2_without_m1"
+    if rec["msgs"][1] and not rec["msgs"][2]:
+        return "only_m1"
+    return "incomplete"
+
+
+def _frames_text(ns, limit=4):
+    ns = list(ns)
+    return "无" if not ns else "、".join(str(n) for n in ns[:limit]) + ("…共 %d 个" % len(ns) if len(ns) > limit else "")
+
+
+def _ssid_text(ssid):
+    return "未知" if ssid is None else '"%s"' % ssid.decode("utf-8", "replace")
+
+
+def track(frames, keys, stats=None):
+    """frames：frames80211.iter_frames 的结果（列表）。返回 (成功的握手 [Handshake], 失败 / 跳过的 [(帧号, 原因)])。
+    stats：可选的 dict，给了就填上诊断信息（不改变返回值）：pairs（每对 (AP, 设备) 的 M1–M4 帧号、SSID、结果计数、状态码）、ssids、eapol（各条报文的个数）、verified、skipped。"""
     ssids = ssids_by_bssid(frames)
     mld = mld_addresses(frames)
     ft_ctx = ft_contexts(frames)
     pending = {}                     # (ap, sta) -> 最近的 M1 (anonce, replay_counter, 帧号)
     done, skipped = [], []
+    pairs = {}                       # (ap, sta) -> _new_pair()，只为日志和诊断，不参与推导
+    rec = lambda ap, sta: pairs.setdefault((ap, sta), _new_pair())      # noqa: E731
+    seen = {}                        # 各条 EAPOL-Key 报文的个数
+    pwd_no_ssid = any(t == "wpa-pwd" and ":" not in v for t, v in keys)
+    log.debug("跟踪握手：%d 把密钥，抓包里看到 %d 个 BSSID 的 SSID", len(keys), len(ssids))
+    if pwd_no_ssid and not ssids:
+        log.warning("密钥里的口令没写 SSID，而抓包里没有信标 / 探测响应 / 关联请求，不知道 SSID，口令推不出 PMK；可以把密钥写成 \"wpa-pwd\",\"口令:SSID\"")
+    tr = log.isEnabledFor(logs.TRACE)
     for f in frames:
         if f.h["type"] == 0 and f.h["subtype"] == 2 and not f.h["protected"]:
             roam = _ft_roam(f, done)
             if roam == "mismatch":
                 skipped.append((f.n, "空中漫游的重关联请求：没有 FT 握手的 PMK-R0 让 FTE 的 MIC 吻合"))
+                log.debug("第 %d 帧：FT 漫游的重关联请求，MIC 对不上任何已推出的 PMK-R0", f.n)
             elif roam is not None:
                 done.append(roam)
+                log.debug("第 %d 帧：FT 漫游验证通过（AP %s，设备 %s）", f.n, roam.ap, roam.sta)
             continue
         raw = fr.eapol_payload(f)
         if raw is None and f.h["protected"]:
@@ -199,32 +242,87 @@ def track(frames, keys):
             continue
         msg = e.get("message")
         h = f.h
+        seen[msg] = seen.get(msg, 0) + 1
+        if tr:
+            logs.trace(log, "第 %d 帧：EAPOL-Key 报文 %s，%s -> %s", f.n, msg, h["sa"], h["da"])
+        if msg in (1, 3):
+            rec(h["sa"], h["da"])["msgs"][msg].append(f.n)
+        elif msg in (2, 4):
+            rec(h["da"], h["sa"])["msgs"][msg].append(f.n)
         if msg == 1:
             pending[(h["sa"], h["da"])] = (e["nonce"], e["replay_counter"], f.n)
         elif msg == 2:
             ap, sta = h["da"], h["sa"]
+            pr = rec(ap, sta)
+            pr["ssid"] = ssids.get(h["bssid"]) if pr["ssid"] is None else pr["ssid"]
             m1 = pending.get((ap, sta))
             if m1 is None or m1[1] != e["replay_counter"]:
                 skipped.append((f.n, "找不到与 Replay Counter 对应的 M1"))
+                pr["other"].append("no_m1")
+                log.debug("第 %d 帧：M2（AP %s，设备 %s）找不到 Replay Counter 对应的 M1，跳过", f.n, ap, sta)
                 continue
             els, _ = ie.walk(e["data"])
             akm, cipher = suite_info(e, ie.decode_all(els))
             if akm is None:
                 skipped.append((f.n, "M2 的 Key Data 里没有 RSN / WPA 元素"))
+                pr["other"].append("no_rsn")
+                log.debug("第 %d 帧：M2 的 Key Data 里没有 RSN / WPA 元素，认不出认证方式，跳过", f.n)
                 continue
             if akm not in AKMS and akm not in FT_AKMS or cipher not in CIPHERS:
                 skipped.append((f.n, "不支持的 AKM %s / 密码套件 %s" % (akm, cipher)))
+                pr["other"].append("unsupported:%s/%s" % (akm, cipher))
+                log.debug("第 %d 帧：M2 声明的 AKM %s / 密码套件 %s 不支持，跳过", f.n, akm, cipher)
                 continue
+            info = {}
             if akm in FT_AKMS:
                 r = (d_ := ie.decode_all(els)).get("rsn") or {}
-                hs = _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssids.get(h["bssid"]), keys, ft_ctx.get((ap, sta)), r.get("pmkids") or [])
+                hs = _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssids.get(h["bssid"]), keys, ft_ctx.get((ap, sta)), r.get("pmkids") or [], info)
             else:
-                hs = _try(f, raw, e, m1, mld.get(ap, ap), mld.get(sta, sta), akm, cipher, ssids.get(h["bssid"]), keys)
+                hs = _try(f, raw, e, m1, mld.get(ap, ap), mld.get(sta, sta), akm, cipher, ssids.get(h["bssid"]), keys, info)
             if hs is None:
                 skipped.append((f.n, "没有候选 PMK 让 M2 的 MIC 吻合"))
+                pr["candidates"] = max(pr["candidates"], info.get("candidates", 0))
+                if info.get("candidates", 0) == 0:
+                    pr["no_candidates"] += 1
+                    pr["no_candidates_why"] = info.get("why") or ("no_ssid" if ssids.get(h["bssid"]) is None else "no_matching_key")
+                    log.debug("第 %d 帧：M2（AP %s，设备 %s，AKM %s）没有可用的候选密钥：%s", f.n, ap, sta, akm, NO_CANDIDATE_WHY.get(pr["no_candidates_why"], pr["no_candidates_why"]))
+                else:
+                    pr["mic_fail"] += 1
+                    log.debug("第 %d 帧：M2（AP %s，设备 %s，AKM %s）试了 %d 个候选密钥，MIC 都对不上", f.n, ap, sta, akm, info["candidates"])
             else:
                 done.append(hs)
+                pr["verified"] += 1
+                pr["candidates"] = max(pr["candidates"], info.get("candidates", 0))
+                log.debug("第 %d 帧：握手验证通过（AP %s，设备 %s，AKM %s，%s，MIC %s，M1=帧 %d，试了 %d 个候选密钥）",
+                          f.n, ap, sta, akm, hs.cipher, hs.mic_alg, m1[2], info.get("candidates", 0))
+    for (ap, sta), pr in pairs.items():
+        if pr["ssid"] is None:
+            pr["ssid"] = ssids.get(ap)
+        pr["state"] = pair_state(pr)
+        log.debug("AP %s <-> 设备 %s（SSID %s）：M1 帧 %s；M2 帧 %s；M3 帧 %s；M4 帧 %s；结果 %s", ap, sta, _ssid_text(pr["ssid"]), _frames_text(pr["msgs"][1]), _frames_text(pr["msgs"][2]),
+                  _frames_text(pr["msgs"][3]), _frames_text(pr["msgs"][4]), STATE_TEXT[pr["state"]])
+        if pr["state"] == "mic_mismatch":
+            log.warning("AP %s <-> 设备 %s（SSID %s）：M2 的 MIC 和 %d 个候选密钥都对不上（共 %d 次）：多半是口令输错，或 SSID 不对（口令:SSID 写错 / 隐藏 SSID），也可能是握手报文被截断",
+                        ap, sta, _ssid_text(pr["ssid"]), pr["candidates"], pr["mic_fail"])
+        elif pr["state"] == "no_candidates":
+            log.warning("AP %s <-> 设备 %s（SSID %s）：有 M2 但没有可用的候选密钥：%s", ap, sta, _ssid_text(pr["ssid"]), NO_CANDIDATE_WHY.get(pr.get("no_candidates_why"), "原因不明"))
+        elif pr["state"] == "only_m1":
+            log.warning("AP %s <-> 设备 %s（SSID %s）：只抓到 M1（帧 %s），没抓到 M2：设备的回复没被监听到（离得远、信道不对或丢包）", ap, sta, _ssid_text(pr["ssid"]), _frames_text(pr["msgs"][1]))
+    n_ok = sum(1 for p in pairs.values() if p["state"] == "verified")
+    log.info("握手：看到 %d 对 (AP, 设备)，%d 对验证通过，共推出 %d 个握手（含重新握手 / FT 漫游），%d 条被跳过", len(pairs), n_ok, len(done), len(skipped))
+    if not pairs:
+        log.info("握手：整个抓包里没有找到四次握手的 EAPOL 报文")
+    if stats is not None:
+        stats.update({"pairs": [dict(p, ap=ap, sta=sta, ssid=None if p["ssid"] is None else p["ssid"].decode("utf-8", "replace")) for (ap, sta), p in pairs.items()], "ssids": {b: v.decode("utf-8", "replace") for b, v in ssids.items()},
+                      "eapol": dict((str(k), v) for k, v in seen.items()), "verified": len(done), "skipped": list(skipped)})
     return done, skipped
+
+
+STATE_TEXT = {"verified": "验证通过", "mic_mismatch": "MIC 对不上", "no_candidates": "没有候选密钥", "only_m1": "只有 M1", "m2_without_m1": "M2 没有对应的 M1 / 缺 RSN 元素",
+              "unsupported": "认证方式 / 套件不支持", "incomplete": "报文不全"}
+NO_CANDIDATE_WHY = {"no_ssid": "不知道这个 AP 的 SSID（抓包里没有它的信标 / 探测响应 / 关联请求），而口令需要 SSID 才能推出 PMK",
+                    "no_matching_key": "密钥文件里没有适用于这种认证方式的密钥（口令只用于 PSK 类认证；802.1X 要给 msk）",
+                    "no_ft_context": "快速切换的握手缺少关联响应里的移动域信息", "no_ssid_ft": "快速切换要用 SSID，而没看到这个 AP 的 SSID"}
 
 
 FtContext = namedtuple("FtContext", "mdid r0kh_id r1kh_id frame")
@@ -281,10 +379,12 @@ def _ft_roam(f, done):
     return "mismatch"
 
 
-def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids):
+def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids, info=None):
     """快速切换的初始 4 次握手：XXKey -> PMK-R0 -> PMK-R1 -> PTK（ft80211），用 M2 的 MIC 验证；
     M2 的 RSN 元素里的 PMKID 应当等于推出的 PMKR1Name，是第二个独立的验证（结果放在 frames["pmkr1name_ok"]）。"""
     if ctx is None or ssid is None:
+        if info is not None:
+            info.update(candidates=0, why="no_ft_context" if ctx is None else "no_ssid_ft")
         return None
     anonce, snonce = m1[0], e["nonce"]
     mic_len = e["mic_len"]
@@ -295,7 +395,10 @@ def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids):
     e2 = eapol.parse(raw, mic_len=mic_len)
     alg = mic_algorithm(version, mic_len, akm)
     zeroed = eapol.zero_mic(raw[:4 + e2["length"]], mic_len)
-    for source, xx in candidate_pmks(keys, ssid, FT_XXKEY_LEN[akm] or ft80211.DIGEST_LEN[kdf_hash], FT_MSK_OFFSET.get(akm, 0)):
+    cands = candidate_pmks(keys, ssid, FT_XXKEY_LEN[akm] or ft80211.DIGEST_LEN[kdf_hash], FT_MSK_OFFSET.get(akm, 0))
+    if info is not None:
+        info["candidates"] = len(cands)
+    for source, xx in cands:
         pmk_r0, r0name = ft80211.derive_r0(xx, kdf_hash, ssid, ctx.mdid, ctx.r0kh_id, _mac(sta))
         pmk_r1, r1name = ft80211.derive_r1(pmk_r0, kdf_hash, r0name, ctx.r1kh_id, _mac(sta))
         kck, kek, tk = ft80211.derive_ptk(pmk_r1, kdf_hash, snonce, anonce, _mac(ap), _mac(sta), kck_len, kek_len, tk_len)
@@ -306,7 +409,7 @@ def _try_ft(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, ctx, pmkids):
     return None
 
 
-def _try(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys):
+def _try(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys, info=None):
     anonce, snonce = m1[0], e["nonce"]
     mic_len = e["mic_len"]          # 由 M2 帧自己的长度关系推出（M2 的 Key Data 里有 RSN 元素，长度必然自洽；否则拿不到 AKM，早就跳过了）
     kdf_hash = KDF_BY_MIC_LEN[mic_len] if AKMS[akm] == "by_mic" else AKMS[akm]
@@ -317,7 +420,10 @@ def _try(f, raw, e, m1, ap, sta, akm, cipher, ssid, keys):
     e2 = eapol.parse(raw, mic_len=mic_len)
     alg = mic_algorithm(version, mic_len, akm)
     zeroed = eapol.zero_mic(raw[:4 + e2["length"]], mic_len)
-    for source, pmk in candidate_pmks(keys, ssid, pmk_len):
+    cands = candidate_pmks(keys, ssid, pmk_len)
+    if info is not None:
+        info["candidates"] = len(cands)
+    for source, pmk in cands:
         kck, kek, tk = derive_ptk(pmk, _mac(ap), _mac(sta), anonce, snonce, kdf_hash, kck_len, kek_len, tk_len)
         if hmac.compare_digest(compute_mic(alg, kck, zeroed, mic_len), e2["mic"]):
             return Handshake(ap, sta, anonce, snonce, (source, pmk), akm, CIPHERS[cipher][0], kdf_hash, descriptor, version,

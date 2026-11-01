@@ -8,6 +8,7 @@ M3 的 Key Data 加密位（Key Info bit 12）置位；WPA1 的 G1 没有这一�
 IGTK KDE 的类型 9：[密钥序号(2，小端), IPN(6), IGTK…]；末尾可能有 0xDD 0x00… 的填充，也可能夹着 RSN 元素（0x30），跳过。
 WPA1（描述符 254）没有 KDE：Key Data 就是 GTK 本身，序号在 Key Info 的 bit 4-5。
 """
+import logging
 from collections import namedtuple
 
 from . import decrypt as dec
@@ -16,6 +17,8 @@ from . import frames as fr
 from . import handshake as hs
 from . import ie
 from . import kdf
+
+log = logging.getLogger(__name__)
 
 # n：EAPOL 帧号；ap：发送 GTK 的 AP（组播帧的 A2 / BSSID）；igtk：(序号, IPN, 密钥) 或 None；source：M3 / G1
 GroupKey = namedtuple("GroupKey", "n ap key_id tx gtk igtk source")
@@ -92,17 +95,20 @@ def mlo_keys(plain, n, source, links=None):
     return out
 
 
-def track_group(frames, done):
+def track_group(frames, done, stats=None):
     """frames：iter_frames 的结果；done：handshake80211.track 推出的握手。返回 [GroupKey]。
-    M3 按 ANonce 找到它属于哪个握手，G1 在这对地址的握手里从新到旧试；两者都先用 KCK 验 MIC，再用 KEK 解 Key Data。"""
+    M3 按 ANonce 找到它属于哪个握手，G1 在这对地址的握手里从新到旧试；两者都先用 KCK 验 MIC，再用 KEK 解 Key Data。
+    stats：可选的 dict，给了就填上 m3_g1（看到的 M3 / G1 个数）、installed（装上的组密钥个数）、failed（没装上的原因 -> 个数：no_handshake / mic / unwrap / no_key）。"""
     out = []
     mld = hs.mld_addresses(frames)
     link_maps = {}                       # AP（MLD 地址）-> {链路 ID: 链路 MAC}
+    seen, failed = 0, {}
     for f in frames:
         if f.h["type"] == 0 and f.h["subtype"] == 3 and not f.h["protected"]:        # 重关联响应：FT 漫游后新 AP 的组密钥在 FTE 的子元素里
             gk = _ft_group_key(f, done)
             if gk is not None:
                 out.append(gk)
+                log.debug("第 %d 帧：FT 重关联响应里装上 GTK（AP %s，序号 %d%s）", f.n, gk.ap, gk.key_id, "，带 IGTK" if gk.igtk else "")
             continue
         raw = fr.eapol_payload(f)
         if raw is None and f.h["protected"]:
@@ -113,23 +119,44 @@ def track_group(frames, done):
         msg = e.get("message")
         if msg not in (3, "G1") or (msg == 3 and e["descriptor"] == 254):     # WPA1 的 M3 里没有 GTK，GTK 在后面的 G1 里
             continue
+        seen += 1
         pair = {mld.get(f.h["sa"], f.h["sa"]), mld.get(f.h["da"], f.h["da"])}
         cands = sorted((x for x in done if {x.ap, x.sta} == pair and x.frames["m2"] < f.n), key=lambda x: -x.frames["m2"])
         if msg == 3:
             cands = [x for x in cands if x.anonce == e["nonce"]]
+        mic_bad = unwrap_bad = 0
         for x in cands:
             e2 = eapol.parse(raw, mic_len=x.mic_len)
             zeroed = eapol.zero_mic(raw[:4 + e2["length"]], x.mic_len)
             if hs.compute_mic(x.mic_alg, x.kck, zeroed, x.mic_len) != e2["mic"]:
+                mic_bad += 1
                 continue
             plain = unwrap_key_data(x.kek, e2)
             if plain is None:
+                unwrap_bad += 1
                 continue
-            gk = keys_from_data(plain, e2, f.h["sa"], f.n, "M3" if msg == 3 else "G1")
+            source = "M3" if msg == 3 else "G1"
+            gk = keys_from_data(plain, e2, f.h["sa"], f.n, source)
+            mlo = mlo_keys(plain, f.n, source, link_maps.setdefault(x.ap, {}))
             if gk is not None:
                 out.append(gk)
-            out.extend(mlo_keys(plain, f.n, "M3" if msg == 3 else "G1", link_maps.setdefault(x.ap, {})))
+                log.debug("第 %d 帧：%s 里装上 GTK（AP %s，序号 %d%s%s）", f.n, source, gk.ap, gk.key_id, "，Tx" if gk.tx else "", "，带 IGTK" if gk.igtk else "")
+            out.extend(mlo)
+            if mlo:
+                log.debug("第 %d 帧：%s 里装上 %d 个多链路组密钥（每条链路各一个）", f.n, source, len(mlo))
+            if gk is None and not mlo:
+                failed["no_key"] = failed.get("no_key", 0) + 1
+                log.debug("第 %d 帧：%s 的 Key Data 解开了，但里面没有组密钥 KDE", f.n, source)
             break
+        else:
+            why = "no_handshake" if not cands else ("mic" if mic_bad else "unwrap")
+            failed[why] = failed.get(why, 0) + 1
+            log.debug("第 %d 帧：%s 没装上组密钥：%s", f.n, "M3" if msg == 3 else "G1",
+                      {"no_handshake": "没有这对设备的（M2 在它之前的）握手", "mic": "MIC 和 %d 个握手都对不上" % mic_bad, "unwrap": "MIC 对了但 Key Data 解不开（%d 个）" % unwrap_bad}[why])
+    log.info("组密钥：看到 %d 条 M3 / G1，装上 %d 个组密钥，没装上 %d 条%s", seen, len(out), sum(failed.values()),
+             "（%s）" % "，".join("%s %d" % kv for kv in sorted(failed.items())) if failed else "")
+    if stats is not None:
+        stats.update({"m3_g1": seen, "installed": len(out), "failed": failed})
     return out
 
 
@@ -241,3 +268,26 @@ def decrypt_group(keys, ciphers, frame):
         if ok:
             return gk, pt
     return None
+
+
+WHY_GROUP = {"cipher_unknown": "不知道这个 AP 的组密码套件（抓包里没有它的信标 / 探测响应 / 关联请求，也没有可猜的握手）", "no_gtk_for_ap": "没有这个 AP 的组密钥（没抓到 M3 / G1）",
+             "no_gtk_keyid": "有这个 AP 的组密钥，但没有帧头里这个密钥序号的", "gtk_after_frame": "这个序号的组密钥是在这一帧之后才装上的（帧比 M3 / G1 早）",
+             "mic_failed": "有对应的组密钥但 MIC 不对（多半是组密钥更新了而没抓到）", "not_group": "不是 AP 发出的组播 / 广播数据帧"}
+
+
+def why_not_group(keys, ciphers, frame):
+    """诊断用：一个受保护的数据帧没被 decrypt_group 解开，原因的代码，见 WHY_GROUP。"""
+    h = frame.h
+    if h["type"] != 2 or not h["protected"] or not (int(h["addr1"].split(":")[0], 16) & 1) or not h["from_ds"] or h["to_ds"]:
+        return "not_group"
+    if ciphers.get(h["addr2"]) not in dec.SUPPORTED or len(frame.body) < 8:
+        return "cipher_unknown"
+    mine = [k for k in keys if k.ap == h["addr2"]]
+    if not mine:
+        return "no_gtk_for_ap"
+    same = [k for k in mine if k.key_id == dec.pn_of(frame.body)[1]]
+    if not same:
+        return "no_gtk_keyid"
+    if not any(k.n < frame.n for k in same):
+        return "gtk_after_frame"
+    return "mic_failed"

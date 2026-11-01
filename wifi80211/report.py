@@ -245,6 +245,8 @@ def _main(argv):
         if protected and not dec:
             note(logging.ERROR, "错误：抓包里有 %d 个受保护的数据帧，一个也没解开。读到的密钥：%s。多半是口令或 SSID 不对，或者没有抓到完整的四次握手（要抓到设备连接的那一刻）。" %
                  (protected, "，".join("%s %d 把" % kv for kv in keyfile.summary(keys).items())))
+            for line in pipeline.explain(pipeline.diagnose(fr, keys)):
+                note(logging.ERROR, "  原因分析：" + line)
             return EXIT_NO_DECRYPT
         if not protected:
             note(logging.WARNING, "提示：抓包里没有受保护的数据帧（没抓到数据，或者是开放网络——开放网络的明文暂不支持）。")
