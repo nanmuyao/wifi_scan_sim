@@ -44,6 +44,10 @@ Realtek）会报 `Operation not supported`**。
 - 工具：`iw`（`sudo apt install iw`）、`tcpdump`（`sudo apt install tcpdump`），
   可选 `airodump-ng`（`sudo apt install aircrack-ng`）。
 
+### 2.1 没有 Linux 机器：Mac 上的虚拟机
+
+可以在 Mac 的 Linux 虚拟机里用 USB 网卡抓包（USB 直通给来宾）；Mac 自带的 WiFi 监听抓不到包，不能用。这一做法**在 Apple Silicon 上尚未验证**，丢包和掉线的风险、软件候选和退路见 `docs/路线B实施方案.md`。
+
 ## 3. 操作步骤
 
 ### 3.1 停用网络管理（避免干扰）
