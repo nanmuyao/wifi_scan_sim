@@ -17,11 +17,12 @@ import os
 import re
 import sys
 
-from . import activity, apps, capture, frames, keyfile, logs, pipeline, plain, traffic
+from . import activity, apps, capture, frames, health, keyfile, logs, pipeline, plain, traffic
 
 LIMITS = "注意：使用时长是从网络活动推出的估计，不是屏幕使用时间；DoH / DoT / ECH 加密的访问看不到，只能看见明文 DNS、TLS 的 SNI 和 QUIC 的 SNI。"
 TRAFFIC_NOTE = "流量 = 抓到的 IP 包的字节（含 IP / TCP / UDP 头和重传），不是应用层数据量；名字来自这条连接的 SNI / Host，或这台设备 DNS 应答里的 IP -> 域名。"
 EXIT_USAGE, EXIT_NO_DECRYPT = 2, 3
+HANDSHAKE_TEXT = {"verified": "已验证", "no_handshake": "没抓到", "only_m1": "只有 M1", "m2_without_m1": "缺 M1", "mic_mismatch": "MIC 对不上", "no_candidates": "无候选密钥", "unsupported": "不支持", "incomplete": "不全"}
 OTHER_DEFAULT = 10
 
 
@@ -83,6 +84,31 @@ def attach_traffic(rep, agg, top=None):
     return rep
 
 
+def attach_health(rep, quality, device=None):
+    """把 health.build 的结果并进报告：rep["health"] 是全部（含没有访问事件的设备）；每台有事件的设备再带一份自己的 "health"。--device 只留这台设备。"""
+    if device:
+        quality = dict(quality, stations=[s for s in quality["stations"] if s["mac"] == device])
+    rep["health"] = quality
+    by = {s["mac"]: s for s in quality["stations"]}
+    for d in rep["devices"]:
+        if d["mac"] in by:
+            d["health"] = by[d["mac"]]
+
+
+def health_lines(quality):
+    """表格里的「抓包质量」一节。"""
+    o = quality["overall"]
+    loss = "-" if o["loss"] is None else "%.1f%%" % (100 * o["loss"])
+    out = ["", "抓包质量（由 802.11 序号缺口估计，是估计不是精确值）：总计丢帧 %s（听到 %d、缺口 %d），断档 %d 处，校验和不对的帧 %d 个。" % (loss, o["seen"], o["missing"], o["outages"], o["bad_fcs"])]
+    for s in quality["stations"]:
+        q = s["seq"]
+        out.append("  设备 %s：受保护 %d 个，解开 %d 个；握手 %s；丢帧 %s；重传 %s" % (
+            s["mac"], s["protected"], s["decrypted"], HANDSHAKE_TEXT.get(s["handshake"], "-"), "-" if q["loss"] is None else "%.1f%%" % (100 * q["loss"]),
+            "-" if q["retry_rate"] is None else "%.0f%%" % (100 * q["retry_rate"])))
+        out += ["    提示：" + n for n in s["notes"]]
+    return out
+
+
 def log_result(rep, stats, rules, events, flow_list):
     """日志的收尾：应用归类、流量的小结，再加一段自成一体的「结果」——日志文件拉到最后就能看到这次跑出了什么。"""
     labelled, total = apps.log_coverage(rules, events)
@@ -103,6 +129,8 @@ def render_table(rep, stats):
     else:
         out = ["抓包：%d 个受保护的数据帧，解开 %d 个；设备 %d 台。" % (stats["protected"], stats["decrypted"], len(rep["devices"]))]
     tr = rep.get("traffic")
+    if rep.get("health") and rep["health"]["stations"]:
+        out += health_lines(rep["health"])
     for d in rep["devices"]:
         out += ["", "设备 %s：%d 个访问事件（%s）" % (d["mac"], d["events"], "，".join("%s %d" % kv for kv in d["kinds"].items()))]
         if tr:
@@ -256,18 +284,23 @@ def _main(argv):
         fr = list(frames.iter_frames(cap))
         cap.packets = []                    # 原始包不再用了（帧里有自己的数据），先放掉，大抓包省下一份内存
         protected = sum(1 for f in fr if f.h["type"] == 2 and f.h["protected"])
-        dec = pipeline.decrypt_capture(fr, keys)
+        dstats = {}
+        dec = pipeline.decrypt_capture(fr, keys, dstats)
         stats = {"frames": len(fr), "protected": protected, "decrypted": len(dec), "mode": "dot11"}
         if protected and not dec:
             note(logging.ERROR, "错误：抓包里有 %d 个受保护的数据帧，一个也没解开。读到的密钥：%s。多半是口令或 SSID 不对，或者没有抓到完整的四次握手（要抓到设备连接的那一刻）。" %
                  (protected, "，".join("%s %d 把" % kv for kv in keyfile.summary(keys).items())))
-            for line in pipeline.explain(pipeline.diagnose(fr, keys)):
+            for line in pipeline.explain(dstats):
                 note(logging.ERROR, "  原因分析：" + line)
             return EXIT_NO_DECRYPT
         if not protected:
             note(logging.WARNING, "提示：抓包里没有受保护的数据帧（没抓到数据，或者是开放网络——开放网络的明文暂不支持）。")
         result = activity.analyze(fr, dec)
+        quality = health.build(fr, dec, dstats["handshake"].get("pairs", []))
+        health.log_summary(quality)
     rep = build(result.events, rules, a.gap, mac, a.min_events, a.unmatched)
+    if mode != "plain":
+        attach_health(rep, quality, mac)
     flow_list = traffic.flows(result)
     attach_traffic(rep, traffic.aggregate(rules, flow_list), a.top)
     log_result(rep, stats, rules, result.events, flow_list)

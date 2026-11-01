@@ -197,5 +197,44 @@ check(rc == 0 and rows[0][:2] == ["device", "row"] and rows[0][-3:] == ["bytes_u
 rc, o, e = cli("--keys", wrong)
 check(rc == 3 and o == "" and "280 个受保护的数据帧，一个也没解开" in e and "口令或 SSID 不对" in e and "wpa-pwd 1 把" in e and "NotTheRight" not in e, "口令错：退出码 3，说出 280 个帧一个也没解开，只报类型和个数，不泄露口令")
 
+print("== 抓包质量（wifi80211/health.py 接进报告）==")
+rc, o, e = cli("--keys", good, "--format", "json")
+doc = json.loads(o)
+hq = doc["health"]
+st = {s["mac"]: s for s in hq["stations"]}
+check(rc == 0 and (hq["overall"]["seen"], hq["overall"]["missing"], hq["overall"]["outages"], hq["overall"]["bad_fcs"]) == (693, 200, 0, 10), "json 的 health.overall：听到 693、缺口 200、断档 0、校验和不对的帧 10（和 tests/oracle/test_health_diff.py 的表一致）")
+check(set(st) == {"00:0d:93:82:36:3a", "00:0d:1d:06:e0:f2"} and st["00:0d:93:82:36:3a"]["handshake"] == "verified" and st["00:0d:1d:06:e0:f2"]["handshake"] == "no_handshake"
+      and (st["00:0d:93:82:36:3a"]["protected"], st["00:0d:93:82:36:3a"]["decrypted"]) == (203, 203) and (st["00:0d:1d:06:e0:f2"]["protected"], st["00:0d:1d:06:e0:f2"]["decrypted"]) == (1, 0),
+      "json 的 health.stations：有受保护帧的 2 台设备，一台握手已验证、203 个全解开，另一台没抓到握手、1 个帧没解开（没有事件的设备也在里面）")
+check(doc["devices"][0]["health"] == st["00:0d:93:82:36:3a"], "每台有事件的设备带自己的 health，和 health.stations 里是同一份")
+check(any("重连" in n for n in st["00:0d:1d:06:e0:f2"]["notes"]) and any("丢帧估计" in n for n in st["00:0d:93:82:36:3a"]["notes"]), "没握手的设备提示重连；丢帧高的设备提示丢帧")
+rc, o, e = cli("--keys", good)
+check(rc == 0 and "抓包质量" in o and "握手 已验证" in o and "握手 没抓到" in o and "让它断开重连一次" in o and o.index("抓包质量") < o.index("设备 00:0d:93:82:36:3a：28"), "表格：设备事件之前有「抓包质量」一节，列出握手状态和下一步")
+check("丢帧估计" not in e and "让它断开重连" not in e, "这些提示只印在报告里，屏幕的日志里不重复（日志文件里记一份）")
+rc, o, e = cli("--keys", good, "--device", "00:0d:1d:06:e0:f2", "--format", "json")
+d3 = json.loads(o)
+check(rc == 0 and [s["mac"] for s in d3["health"]["stations"]] == ["00:0d:1d:06:e0:f2"], "--device：抓包质量也只留这台设备")
+logf = os.path.join(tmp, "h.log")
+p = subprocess.run([sys.executable, "-m", "wifi80211.report", "--log-file", logf, "--redact", sample, "--keys", good], capture_output=True, text=True, env=env, cwd=ROOT)
+text = open(logf, encoding="utf-8").read()
+check(p.returncode == 0 and "抓包质量（总计）" in text and "校验和不对的帧 10 个" in text and "抓包质量：设备" in text and "00:0d:93:82:36:3a" not in text and "让它断开重连" in text,
+      "日志文件：总计一行、每台设备一行，提示也记了；--redact 后 MAC 被换成标记")
+import contextlib  # noqa: E402
+from wifi80211 import pipeline  # noqa: E402
+calls = []
+real = pipeline.decrypt_capture
+pipeline.decrypt_capture = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+try:
+    with contextlib.redirect_stderr(io.StringIO()) as err:
+        rc_inproc = report.main([sample, "--keys", wrong, "--no-log-file"])
+finally:
+    pipeline.decrypt_capture = real
+check(rc_inproc == 3 and len(calls) == 1 and "原因分析" in err.getvalue(), "一个也没解开时，原因分析用同一次解密的诊断信息，整份抓包只解密 1 遍（以前要为了分析再解密一遍）")
+rep0 = report.build([], R)
+report.attach_health(rep0, hq, None)
+check(rep0["health"] is hq and not any("health" in d for d in rep0["devices"]), "attach_health：没有事件的报告也能挂上 health，不给不存在的设备造条目")
+tab0 = report.render_table({"devices": []}, {"frames": 1, "protected": 0, "decrypted": 0})
+check("抓包质量" not in tab0, "报告里没有 health（明文抓包）：不印这一节")
+
 print("\n结果: %s（%d 项失败）" % ("全部通过" if not failures else "存在失败", len(failures)))
 sys.exit(0 if not failures else 1)
