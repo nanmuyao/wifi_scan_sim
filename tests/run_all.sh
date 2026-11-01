@@ -37,6 +37,8 @@ run "解密流水线接线（WEP 合成帧、A-MSDU）" python3 tests/test_pipel
 run "解密后的内容对照 tshark（1301 个数据帧逐层，校验和全部吻合）" python3 tests/oracle/test_net_diff.py
 run "DNS / mDNS 报文（名字压缩、记录类型、坏报文，scapy 独立构造）" python3 tests/test_dns.py
 run "DNS / mDNS 对照 tshark（3 个样例 40 帧逐字段）" python3 tests/oracle/test_dns_diff.py
+run "TCP 流重组（乱序、重传、重叠、回绕、缺口，scapy 独立构造）" python3 tests/test_tcpstream.py
+run "TCP 流重组对照 tshark 的 Follow TCP Stream（真实抓包 10 个方向含 4 处缺包 + 合成 12 个方向）" python3 tests/oracle/test_tcpstream_diff.py
 run "Wireshark 公布的 TK / GTK 全部被我们推出（21 个 TK、20 个 GTK）" python3 tests/oracle/test_published_keys.py
 run "用户直接给 TK 解密对照 tshark（5 个样例）" python3 tests/oracle/test_user_tk.py
 run "TDLS（建立帧、TPK、MIC、直连帧解密，独立构造）" python3 tests/test_tdls.py

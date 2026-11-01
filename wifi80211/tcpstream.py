@@ -1,0 +1,114 @@
+# -*- coding: utf-8 -*-
+"""
+TCP 流重组：把同一个方向上乱序、重传、重叠的段按序号拼回连续的字节，用来拿到一条连接开头的应用层数据（如 TLS ClientHello）。纯标准库。
+
+只管一个方向的字节流，不做拥塞、窗口、超时：
+  - 起点：见过 SYN 就是 SYN 序号 + 1；没见过（抓包从连接中途开始）就取见到的最小序号。
+  - 序号是 32 位会回绕：全部换成「相对第一个见到的段」的有符号偏移再比。
+  - 重叠 / 重传：内容正常情况下和原来一样；真不一样时以起点靠前的段为准，靠后的段只补它没盖到的字节。
+  - 校验和不对的段丢掉（解密或抓包错误产生的垃圾不进流）。
+  - 遇到空缺就停，data() 只返回从起点开始连续的那一段；gap 告诉后面还有没有数据。
+"""
+SYN, ACK = 0x02, 0x10
+MAX_BYTES = 1 << 20                                                    # 每个方向最多存这么多负载字节，防止异常流吃光内存
+
+
+def _rel(seq, ref):
+    """seq 相对 ref 的有符号偏移（模 2^32）。"""
+    d = (seq - ref) & 0xFFFFFFFF
+    return d - (1 << 32) if d >= 1 << 31 else d
+
+
+class Direction:
+    def __init__(self):
+        self.ref = None                                                # 第一个见到的段的序号，所有偏移相对它
+        self.syn_at = None                                             # SYN 的偏移（见过 SYN 时）
+        self.opener = False                                            # 见过只有 SYN、没有 ACK 的包：这个方向是发起连接的客户端
+        self.segs = {}                                                 # 偏移 -> 负载（同一偏移只留先到的、更长的）
+        self.stored = 0
+        self.packets = 0
+        self.first_frame = None
+
+    def add(self, tcp, frame=None):
+        if tcp["checksum_ok"] is False:
+            return
+        if self.ref is None:
+            self.ref = tcp["seq"]
+            self.first_frame = frame
+        self.packets += 1
+        off = _rel(tcp["seq"], self.ref)
+        if tcp["flags"] & SYN:
+            self.syn_at = off if self.syn_at is None else self.syn_at
+            self.opener = self.opener or not tcp["flags"] & ACK
+            off += 1                                                   # SYN 占一个序号，数据（Fast Open）从下一个开始
+        data = tcp["payload"]
+        if not data or self.stored + len(data) > MAX_BYTES:
+            return
+        old = self.segs.get(off)
+        if old is None or len(data) > len(old):
+            self.stored += len(data) - (len(old) if old else 0)
+            self.segs[off] = data
+
+    @property
+    def start(self):
+        if self.syn_at is not None:
+            return self.syn_at + 1
+        return min(self.segs) if self.segs else None
+
+    def pieces(self):
+        """整个方向按序号排好的内容：[("data", 字节), ("gap", 缺的字节数), ...]，缺口两边的数据不接在一起。重叠部分只取一次。"""
+        pos = self.start
+        out = []
+        if pos is None:
+            return out
+        for off in sorted(self.segs):
+            seg = self.segs[off]
+            end = off + len(seg)
+            if end <= pos:
+                continue                                               # 完全在已有字节之内（重传）
+            if off > pos:
+                out.append(("gap", off - pos))
+                pos = off
+            if out and out[-1][0] == "data":
+                out[-1] = ("data", out[-1][1] + seg[pos - off:])      # 与已有字节重叠的前部丢掉
+            else:
+                out.append(("data", seg[pos - off:]))
+            pos = end
+        return out
+
+    def data(self, limit=None):
+        """从起点开始连续的字节（最多 limit 个），遇到缺口就停。起点处就缺的话是空。"""
+        first = self.pieces()[:1]
+        got = first[0][1] if first and first[0][0] == "data" else b""
+        return got if limit is None else got[:limit]
+
+    @property
+    def gap(self):
+        """连续部分之后是否还有不连续的段（中间丢了包 / 没抓到）。"""
+        return any(k == "gap" for k, _ in self.pieces())
+
+
+class Flows:
+    """按（源 IP, 源端口, 目的 IP, 目的端口）分方向收段。"""
+
+    def __init__(self):
+        self.dirs = {}
+
+    def add(self, src, dst, tcp, frame=None):
+        key = (src, tcp["sport"], dst, tcp["dport"])
+        self.dirs.setdefault(key, Direction()).add(tcp, frame)
+
+    def pairs(self):
+        """每条连接一项：{(a, 端口, b, 端口): {...}}，键取先出现的方向；值含两个方向对象和 client（发 SYN 且没带 ACK 的一方的键；没抓到握手就按先出现的方向）。"""
+        out, seen = [], set()
+        for key, d in self.dirs.items():
+            rev = (key[2], key[3], key[0], key[1])
+            if key in seen:
+                continue
+            seen.update((key, rev))
+            r = self.dirs.get(rev)
+            client = key
+            if r is not None and r.opener and not d.opener:
+                client = rev
+            out.append({"key": key, "client": client, "fwd": d, "rev": r})
+        return out
