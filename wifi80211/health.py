@@ -249,4 +249,4 @@ def log_summary(health):
                  s["mac"], s["protected"], s["decrypted"], s["handshake"] or "-", "-" if q["loss"] is None else "%.1f%%" % (100 * q["loss"]), q["outages"],
                  "-" if q["retry_rate"] is None else "%.0f%%" % (100 * q["retry_rate"]))
         for n in s["notes"]:
-            log.warning("抓包质量：设备 %s：%s", s["mac"], n)
+            log.warning("抓包质量：设备 %s：%s", s["mac"], n, extra={"file_only": True})            # 报告里已经印给人看了，屏幕上不重复
