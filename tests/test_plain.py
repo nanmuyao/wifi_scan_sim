@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
-from scapy.all import DNS, DNSQR, DNSRR, Dot1AD, Dot1Q, Ether, IP, IPv6, TCP, UDP, Raw, conf  # noqa: E402
+from scapy.all import ICMPv6ND_NS, ICMPv6ND_RA, DNS, DNSQR, DNSRR, Dot1AD, Dot1Q, Ether, IP, IPv6, TCP, UDP, Raw, conf  # noqa: E402
 
 conf.verb = 0
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -99,6 +99,33 @@ wan = Ether(src="02:00:00:00:00:77", dst=RTR) / IP(src=SRV, dst=LAN) / TCP(sport
 pw = plain.iter_packets(capture.parse_capture(pcap_bytes([(1, bytes(up_pub)), (2, bytes(wan))])))
 r2, m2 = plain.learn(pw)
 check(plain.classify(pw[1], r2, m2) == (None, False), "下行包的目的 MAC 是路由器自己（在 WAN 一侧抓的、或 NAT 之后）：认不出设备（None），不乱归")
+
+print("== IPv6：设备自己有全球地址，路由器不能从地址范围学（Mac 上抓包发现的）==")
+G6, S6, RLL = "2001:db8:1::11", "2001:db8:99::80", "fe80::1"
+nd = Ether(src=RTR, dst=DEV) / IPv6(src=RLL, dst=G6) / ICMPv6ND_NS(tgt=G6)             # 路由器发给设备全球地址的邻居请求：源是链路本地，目的是全球地址
+ra = Ether(src=RTR, dst="33:33:00:00:00:01") / IPv6(src=RLL, dst="ff02::1") / ICMPv6ND_RA()
+v4up, v4down = up_pub, down_pub
+v6up = Ether(src=DEV, dst=RTR) / IPv6(src=G6, dst=S6) / TCP(sport=41000, dport=443)
+v6down = Ether(src=RTR, dst=DEV) / IPv6(src=S6, dst=G6) / TCP(sport=443, dport=41000)
+mix = plain.iter_packets(capture.parse_capture(pcap_bytes([(i, bytes(x)) for i, x in enumerate((nd, v4up, v4down, v6up, v6down), 1)])))
+r6, m6 = plain.learn(mix)
+check(r6 == {RTR}, "邻居请求不会把设备学成路由器（路由器只有 RTR 一个）")
+check([plain.classify(p, r6, m6) for p in mix][1:] == [(DEV, True), (DEV, False), (DEV, True), (DEV, False)], "IPv4 下行不再丢；IPv6 全球地址 <-> 全球地址按 MAC 判断上下行，设备是 DEV")
+only6 = plain.iter_packets(capture.parse_capture(pcap_bytes([(i, bytes(x)) for i, x in enumerate((nd, ra, v6up, v6down), 1)])))
+ro6, mo6 = plain.learn(only6)
+check(ro6 == {RTR} and [plain.classify(p, ro6, mo6) for p in only6][2:] == [(DEV, True), (DEV, False)], "纯 IPv6 抓包：路由器从路由器通告（类型 134）的发送者学到，上下行照样认得出")
+no_ra = plain.iter_packets(capture.parse_capture(pcap_bytes([(i, bytes(x)) for i, x in enumerate((nd, v6up, v6down), 1)])))
+rn, mn = plain.learn(no_ra)
+check(rn == set(), "纯 IPv6 而且没有路由器通告：学不到路由器，也不把设备学成路由器")
+mc6 = Ether(src=DEV, dst="33:33:00:00:00:fb") / IPv6(src=G6, dst="ff02::fb") / UDP(sport=5353, dport=5353)
+pm = plain.iter_packets(capture.parse_capture(pcap_bytes([(1, bytes(v4up)), (2, bytes(v4down)), (3, bytes(mc6))])))
+rm, mm6 = plain.learn(pm)
+check(plain.classify(pm[2], rm, mm6)[1] is not False, "IPv6 组播（目的 MAC 是组播）不会被当成下行")
+RTR2 = "02:00:00:00:00:fd"
+two = plain.iter_packets(capture.parse_capture(pcap_bytes([(1, bytes(v4up)), (2, bytes(Ether(src=DEV, dst=RTR2) / IP(src=LAN, dst=SRV) / TCP(sport=40002, dport=443))),
+                                                           (3, bytes(Ether(src=RTR, dst=RTR2) / IPv6(src=S6, dst="2001:db8:98::1") / UDP(sport=1, dport=2)))])))
+rt, mt = plain.learn(two)
+check(rt == {RTR, RTR2} and plain.classify(two[2], rt, mt) == (None, None), "两个路由器之间的 IPv6 包不归任何设备（源和目的 MAC 都是路由器）")
 
 print("== cooked：设备靠链路层源地址和 IP -> MAC ==")
 def sll_pkt(ptype, mac, ipx):

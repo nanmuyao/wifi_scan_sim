@@ -11,6 +11,9 @@
      （cooked 抓包没有目的 MAC：本机发出的包 pkt_type=4 是下行，设备靠 IP -> MAC 表认；别人发来的是上行。）
   4. 其它（两端都是公网、组播来源…）：不归任何设备。
   路由器 MAC 是从抓包里学的：把局域网地址的包发给公网时它的目的 MAC，和公网来的包它的源 MAC。
+  IPv6 的全球地址从地址上分不出是自己人还是公网（设备自己就有全球地址），所以路由器 MAC 只从 IPv4 学（私网 / 公网界限可靠），
+  再加上 IPv6 路由器通告（ICMPv6 类型 134）的发送者 MAC；不从 IPv6 地址范围学（路由器发给设备全球地址的邻居通告会把设备学成路由器）。
+  学到路由器之后，以太网抓包里的 IPv6 单播包直接按 MAC 判断：路由器发来的是下行（设备 = 目的 MAC），发给路由器的是上行（设备 = 源 MAC）。
 Linux cooked 头里没有目的 MAC：设备 MAC 只能取「别人发来的、源是局域网地址」的包的链路层源地址，并学到「IP -> MAC」，下行包靠这张表认设备；
 `-i any` 会把同一个包在不同接口各抓一次，请在局域网一侧的接口上抓（`tcpdump -i eth0`），不要用 `-i any`。
 
@@ -128,14 +131,20 @@ def learn(packets):
         if ad is None:
             continue
         s, d = scope(ad[0]), scope(ad[1])
-        if not p.cooked:
-            if s == "lan" and d == "pub" and p.dst:
-                routers.add(p.dst)
-            elif s == "pub" and d == "lan" and p.src:
+        if not p.cooked and p.src:
+            if ad[0].version == 4:
+                if s == "lan" and d == "pub" and p.dst:
+                    routers.add(p.dst)
+                elif s == "pub" and d == "lan":
+                    routers.add(p.src)
+            elif p.l3[6] == 58 and len(p.l3) > 40 and p.l3[40] == ICMPV6_RA:
                 routers.add(p.src)
         if s == "lan" and p.src and p.pkt_type != PACKET_OUTGOING:
             ip_mac.setdefault(str(ad[0]), p.src)
     return routers, ip_mac
+
+
+ICMPV6_RA = 134
 
 
 def classify(p, routers, ip_mac):
@@ -143,6 +152,11 @@ def classify(p, routers, ip_mac):
     ad = addresses(p)
     if ad is None:
         return None, None
+    if ad[0].version == 6 and not p.cooked and routers:
+        if p.src in routers and p.dst not in routers:                  # IPv6：地址范围分不出自己人，按 MAC 判断
+            return p.dst, False
+        if p.dst in routers and p.src not in routers:
+            return p.src, True
     s, d = scope(ad[0]), scope(ad[1])
     if s == "lan" and d in ("pub", "other"):
         return (p.src if p.pkt_type != PACKET_OUTGOING else None), True
