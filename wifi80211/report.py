@@ -17,7 +17,7 @@ import os
 import re
 import sys
 
-from . import activity, apps, capture, frames, health, keyfile, logs, pipeline, plain, traffic
+from . import activity, apps, capture, frames, health, keyfile, logs, pipeline, plain, streaming, traffic
 
 LIMITS = "注意：使用时长是从网络活动推出的估计，不是屏幕使用时间；DoH / DoT / ECH 加密的访问看不到，只能看见明文 DNS、TLS 的 SNI 和 QUIC 的 SNI。"
 TRAFFIC_NOTE = "流量 = 抓到的 IP 包的字节（含 IP / TCP / UDP 头和重传），不是应用层数据量；名字来自这条连接的 SNI / Host，或这台设备 DNS 应答里的 IP -> 域名。"
@@ -84,6 +84,34 @@ def attach_traffic(rep, agg, top=None):
     return rep
 
 
+STREAM_EPISODES = 3                                                      # 每个应用在表格里列最长的几个时段
+
+
+def attach_streaming(rep, summary, params):
+    """把 streaming.summary 的结果并进报告：每台有持续下行时段的设备加 "streaming"：[{"app", "seconds", "bytes_down", "episodes": [...]}]，按合计秒数从多到少；
+    rep["streaming_params"] 记下用的参数（rep["streaming"] 为 True 时表格才印这一节）。"""
+    rep["streaming_params"] = dict(params)
+    rep["streaming"] = bool(summary)
+    for d in rep["devices"]:
+        rows = [dict(app=app, seconds=v["seconds"], bytes_down=v["bytes_down"], episodes=v["episodes"])
+                for (st, app), v in summary.items() if st == d["mac"]]
+        rows.sort(key=lambda r: (-r["seconds"], r["app"]))
+        if rows:
+            d["streaming"] = rows
+
+
+def streaming_lines(d, params):
+    """表格里一台设备的「持续下行」一节。"""
+    out = ["  持续下行的时段（下行连续不断地在收数据；看视频是这个样子，下载、直播也是，不是结论）："]
+    for r in d["streaming"]:
+        out.append("    %-24s 合计 %.1f 分钟，%d 个时段，下行 %s" % (r["app"], r["seconds"] / 60.0, len(r["episodes"]), traffic.human(r["bytes_down"])))
+        for e in sorted(r["episodes"], key=lambda e: -e["seconds"])[:STREAM_EPISODES]:
+            out.append("      %s  %4.1f 分钟  平均 %s/秒" % (iso(e["start"]), e["seconds"] / 60.0, traffic.human(e["avg_rate"])))
+        if len(r["episodes"]) > STREAM_EPISODES:
+            out.append("      …还有 %d 个更短的时段" % (len(r["episodes"]) - STREAM_EPISODES))
+    return out
+
+
 def attach_health(rep, quality, device=None):
     """把 health.build 的结果并进报告：rep["health"] 是全部（含没有访问事件的设备）；每台有事件的设备再带一份自己的 "health"。--device 只留这台设备。"""
     if device:
@@ -142,6 +170,8 @@ def render_table(rep, stats):
                                                                           ("  %10s %10s %5d" % (traffic.human(r["bytes_up"]), traffic.human(r["bytes_down"]), r["flows"])) if tr else ""))
         else:
             out.append("  没有能归到应用的域名。")
+        if d.get("streaming"):
+            out += streaming_lines(d, rep["streaming_params"])
         if tr and d["other_traffic"]:
             out.append("  其它流量（没规则或没有名字，按流量取前 %d 个）：" % len(d["other_traffic"]))
             out += ["    %10s %10s %5d  %s" % (traffic.human(o["bytes_up"]), traffic.human(o["bytes_down"]), o["flows"], o["name"]) for o in d["other_traffic"]]
@@ -150,7 +180,10 @@ def render_table(rep, stats):
             out += ["    %5d  %s" % (n, name) for name, n in d["unlabelled"]]
     if not rep["devices"]:
         out += ["", "没有看到任何设备的 DNS / TLS / QUIC 访问（解开了数据帧，但里面没有这些）。"]
-    return "\n".join(out + [""] + ([TRAFFIC_NOTE] if tr else []) + [LIMITS]) + "\n"
+    sp = rep.get("streaming_params")
+    note_s = ["持续下行的门槛：每 5 秒一格，下行速率不低于 %s/秒算活跃，活跃格之间空着不超过 %g 秒连成一段，一段至少 %g 秒；默认值是没有用真实数据标定过的猜测，可以用 --stream-rate / --stream-gap / --stream-min-seconds 调。"
+              % (traffic.human(sp["min_rate"]), sp["max_gap"], sp["min_seconds"])] if rep.get("streaming") else []
+    return "\n".join(out + [""] + ([TRAFFIC_NOTE] if tr else []) + note_s + [LIMITS]) + "\n"
 
 
 def render_json(rep, stats):
@@ -241,12 +274,17 @@ def _main(argv):
     p.add_argument("--log-file", metavar="FILE", help="日志文件（默认当前目录的 wifi80211-时间.log）")
     p.add_argument("--no-log-file", action="store_true", help="不写日志文件")
     p.add_argument("--redact", action="store_true", help="日志里的 MAC、IP、域名换成短标记（要把日志发给别人之前用；报告本身不受影响）")
+    p.add_argument("--stream-rate", type=float, default=streaming.DEFAULTS["min_rate"] / 1000.0, metavar="KB/S", help="下行速率不低于多少 KB/秒（1000 字节）才算「在持续下行」（默认 %g；没有用真实数据标定过）" % (streaming.DEFAULTS["min_rate"] / 1000.0))
+    p.add_argument("--stream-min-seconds", type=float, default=streaming.DEFAULTS["min_seconds"], metavar="SECONDS", help="持续下行至少多少秒才列出（默认 %g）" % streaming.DEFAULTS["min_seconds"])
+    p.add_argument("--stream-gap", type=float, default=streaming.DEFAULTS["max_gap"], metavar="SECONDS", help="活跃之间空着不超过多少秒算连着（默认 %g；一块一块拉的视频中间会有空）" % streaming.DEFAULTS["max_gap"])
     p.add_argument("--top", type=int, metavar="N", help="每台设备的应用表按流量取前 N 个，其它流量也只留前 N 个（不给：应用按估计秒数排序，其它流量留 10 个）")
     try:
         a = p.parse_args(argv)
     except SystemExit as e:
         return EXIT_USAGE if e.code else 0
     err = lambda m: (log.error("%s", m, extra=FILE_ONLY), print("错误：" + m, file=sys.stderr), EXIT_USAGE)[2]               # noqa: E731
+    if a.stream_rate <= 0 or a.stream_min_seconds <= 0 or a.stream_gap < 0:
+        return err("--stream-rate、--stream-min-seconds 要大于 0，--stream-gap 不能是负数")
     if a.gap <= 0 or a.unmatched < 0 or a.min_events < 0 or (a.top is not None and a.top < 0):
         return err("--gap 要大于 0，--unmatched、--min-events 和 --top 不能是负数")
     mac = None
@@ -301,8 +339,13 @@ def _main(argv):
     rep = build(result.events, rules, a.gap, mac, a.min_events, a.unmatched)
     if mode != "plain":
         attach_health(rep, quality, mac)
-    flow_list = traffic.flows(result)
+    flow_list = traffic.flows(result, with_bins=True)
     attach_traffic(rep, traffic.aggregate(rules, flow_list), a.top)
+    sparams = {"min_rate": int(a.stream_rate * 1000), "min_seconds": a.stream_min_seconds, "max_gap": a.stream_gap}
+    sres = {k: v for k, v in streaming.summary(rules, flow_list, **sparams).items() if mac is None or k[0] == mac}
+    attach_streaming(rep, sres, sparams)
+    log.info("持续下行：%d 个设备应用组合有时段，共 %d 个时段（门槛 %s/秒、至少 %g 秒、空格 %g 秒）", len(sres), sum(len(v["episodes"]) for v in sres.values()),
+             traffic.human(sparams["min_rate"]), sparams["min_seconds"], sparams["max_gap"])
     log_result(rep, stats, rules, result.events, flow_list)
     sys.stdout.write(RENDER[a.format](rep, stats))
     if a.format == "csv":
