@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """密钥文件（keyfile80211）和一条命令出报告（report80211）：解析与报错、汇总（排序、过滤、按设备）、三种输出格式、命令行的退出码与错误信息；
 最后在真实样例 wpa-Induction 上把 CLI 当子进程跑一遍（口令对 / 错、--device、--rules、三种格式）。"""
+import collections
 import csv
 import io
 import json
@@ -191,7 +192,8 @@ rc, o, e = cli("--keys", good)
 check(rc == 0 and "设备 00:0d:93:82:36:3a：28 个访问事件" in o and report.LIMITS in o, "默认表格：设备行和局限说明")
 rc, o, e = cli("--keys", good, "--format", "csv", "--unmatched", "100")
 rows = list(csv.reader(io.StringIO(o)))
-check(rc == 0 and rows[0][:2] == ["device", "row"] and len(rows) == 12 and report.LIMITS in e and report.LIMITS not in o, "csv：1 行表头 + 11 行没规则的域名；局限说明走 stderr，csv 保持干净")
+kinds = collections.Counter(r[1] for r in rows[1:])
+check(rc == 0 and rows[0][:2] == ["device", "row"] and rows[0][-3:] == ["bytes_up", "bytes_down", "flows"] and kinds == {"unlabelled": 11, "traffic_other": 10} and report.LIMITS in e and report.LIMITS not in o, "csv：表头多三列流量，11 行没规则的域名 + 10 行其它流量（默认留 10 个）；局限说明走 stderr，csv 保持干净")
 rc, o, e = cli("--keys", wrong)
 check(rc == 3 and o == "" and "280 个受保护的数据帧，一个也没解开" in e and "口令或 SSID 不对" in e and "wpa-pwd 1 把" in e and "NotTheRight" not in e, "口令错：退出码 3，说出 280 个帧一个也没解开，只报类型和个数，不泄露口令")
 

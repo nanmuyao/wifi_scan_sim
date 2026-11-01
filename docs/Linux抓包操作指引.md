@@ -130,12 +130,22 @@ python3 -m wifi80211.report capture.pcap --keys keys.txt
 # 或者 python3 wifi_report.py capture.pcap --keys keys.txt
 ```
 
-输出每台设备（MAC）的访问事件、归到的应用（类别、估计的使用段数和秒数）、没有规则的域名。常用选项：`--format json|csv`、`--device MAC`、`--gap 60`（相邻访问多少秒内算同一段）、
-`--unmatched 15`（每台设备列出多少个没有规则的域名）、`--min-events N`、`--rules my.json`（自己的域名 -> 应用规则，格式见 `rules/README.md`，优先于自带规则）。
+输出每台设备（MAC）的访问事件、归到的应用（类别、估计的使用段数和秒数、上行 / 下行流量）、没有规则的域名和「其它流量」（没规则或没有名字的流，按对端 IP 列出）。常用选项：`--format json|csv`、`--device MAC`、`--gap 60`（相邻访问多少秒内算同一段）、
+`--unmatched 15`（每台设备列出多少个没有规则的域名）、`--min-events N`、`--top N`（应用表按流量从大到小只留前 N 个）、`--rules my.json`（自己的域名 -> 应用规则，格式见 `rules/README.md`，优先于自带规则）。
 密钥文件还可以放 `wpa-psk`（直接给 PMK）、`msk`、`wep`、`tk`，见 `wifi80211/keyfile.py`。
 
 注意：使用时长是从网络活动推出的估计，不是屏幕使用时间；DoH / DoT / ECH 加密的访问看不到；开放网络（没有加密）的明文暂不支持。
 如果提示「一个也没解开」，多半是口令或 SSID 不对，或者抓包里没有完整的四次握手——关掉设备的 WiFi 再打开，重新抓一次。
+
+**在网关或局域网一侧抓到的明文包**（链路类型是以太网或 Linux cooked，没有 WiFi 加密）：不需要密钥文件，命令一样，自动识别：
+
+```bash
+sudo tcpdump -i eth0 -w gw.pcap          # 在局域网一侧的接口上抓；不要用 -i any（同一个包会在不同接口各抓一次）
+python3 -m wifi80211.report gw.pcap
+```
+
+设备的 MAC 只有在**局域网一侧**才看得到：在路由器后面（WAN 一侧）或 NAT 之后抓，所有包的 MAC 都是路由器的，设备分不开。
+怎么判断某个包属于哪台设备、是上行还是下行，见 `wifi80211/plain.py` 的说明。流量是抓到的 IP 包字节（含包头和重传），不是应用层数据量。
 
 ## 4. 抓一份「四次握手」样本（供阶段 4 验证）
 
