@@ -35,7 +35,7 @@ AIGC:
    真实网络的采集。
 2. **真实抓包仅限自建实验网络**：如需在真实环境验证帧解析，只能在**自己搭建的
    实验网络 / 自有设备**上进行，且需在支持监听模式的系统（如 Linux）中操作；
-   macOS 网卡实测不支持 RFMON（见后文），请勿在他人网络或公共网络上抓包。
+   这台 Mac 的网卡实测收不到监听帧（见后文），请勿在他人网络或公共网络上抓包。
 3. **WPA2 解密仅限已知口令的自有网络或公开样例**：本仓库的 WPA2 相关功能
    （PMK 推导、四次握手解析、MIC 校验、CCMP 解密）仅用于已知口令前提下学习
    协议与算法；不得对他人网络进行口令爆破或解密。
@@ -68,7 +68,9 @@ AIGC:
 | `stm32_project/` | STM32 完整工程（CubeMX .ioc + 源码） | F103C8T6 + USART1(ESP8266) + USART2(调试)，复用 ap_parser 解析库，修正逐字节接收缓冲、NUL 结尾、帧结束判定（看 OK/ERROR/FAIL 终止行）三处隐患 |
 | `tools/serial_wifi_plot.py` | 串口实时绘图脚本 | 解析 `[i] ch=.. rssi=.. enc=.. ssid=..` 输出，画信道热力图 + RSSI 时间曲线，Ctrl+C 保存 PNG |
 | `wifi_report.py` | 一条命令出报告（实现在 `wifi80211/report.py`） | 抓包 + 密钥文件 -> 解密 -> 每台设备的 DNS / TLS SNI / QUIC 访问 -> 归到应用 -> 使用估计和上下行流量；网关 / 局域网一侧抓的明文包（以太网 / cooked）不需要密钥；用法见 `docs/Linux抓包操作指引.md` 的 3.6 |
-| `docs/Linux抓包操作指引.md` | Linux 监听模式抓包指引（阶段 3） | macOS 无 RFMON 已实测（tcpdump -I 收不到帧），指引用户在有监听模式的 Linux 机器上、**仅限自建实验网络**抓包回传，再用 `wifi_frame_parser.py` 验证；含步骤与常见问题 |
+| `docs/技术路线.md` | 技术路线总览 | 需求与两条路线（自己的网关 / 监听空口）、数据流、关键技术选择、验证方法、已知限制、日志与排错 |
+| `docs/日志规范.md` | 日志规范 | 每次运行写的日志文件、级别、`--redact`、密钥永不进日志 |
+| `docs/Linux抓包操作指引.md` | Linux 监听模式抓包指引（阶段 3） | 在这台 Apple Silicon Mac 上实测 `tcpdump -I` 收不到帧（别的机型有成功也有失败的报告），指引用户在有监听模式的 Linux 机器上、**仅限自建实验网络**抓包回传，再用 `wifi_frame_parser.py` 验证；含步骤与常见问题 |
 | `docs/采购清单与接线方案.md` | 三档采购清单 + 接线图 | 经济档 ¥70 / 标准档 ¥200 / 进阶档 ¥1300（频谱版） |
 | `docs/ESP32版设计文档.md` | ESP32 版设计文档（阶段 5） | 硬件选型差异（ESP32 vs STM32+ESP8266）、软件架构（直扫→解析→聚合→WebSocket/Web Serial 仪表盘）、ESP-IDF/Wokwi/qemu 仿真路径、与阶段1-4 代码复用关系、里程碑拆分与验收标准 |
 | `docs/RTL-SDR频谱方案.md` | RTL-SDR 频谱方案可行性文档（阶段 6 · 路线B） | STM32F7 直解 vs PC 端 rtl_power vs 混合三方案对比、硬件需求与成本、数据率/FFT 瓶颈（4.8-6.4 MB/s I/Q 流 + DMA 乒乓）、软件架构建议、无硬件仿真路径（L1-L4）、可行性结论（F7 算力够、RTL-SDR 覆盖上限 ~1.7GHz 需 upconverter 才能看 2.4GHz WiFi） |
@@ -195,7 +197,7 @@ python3 wifi_frame_parser.py --pcap capture.pcap
 > **真实抓包边界**：请在**自己搭建的实验网络**中操作，勿对他人 / 公共网络抓包
 > （详见「合法性边界」）。
 
-> **macOS 监听模式限制（实测）**：Apple Silicon / 802.11ac+ 网卡不支持真 RFMON，
+> **macOS 监听模式限制（在这台 Apple Silicon Mac 上的实测，不是普遍结论）**：这台机器的内置网卡：
 > `tcpdump -I -i en0` 虽显示 `link-type IEEE802_11_RADIO` 但收不到任何帧（0 packets），
 > `awdl0` 直接报 `doesn't support monitor mode`。解析器已用 demo.pcap（scapy 构造的
 > Radiotap 混合流量，17 帧全类型）与 en0 真实大流量 pcap（17312 帧容器解析）双重验证。

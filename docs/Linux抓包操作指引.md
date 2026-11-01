@@ -13,7 +13,7 @@ AIGC:
 
 > 阶段 3（P0）：在支持监听模式的 Linux 机器上抓取真实 802.11 帧（重点：Probe Request /
 > Beacon / WPA2 握手 EAPOL），回传后用仓库内 `wifi_frame_parser.py` 做字节级验证。
-> macOS 网卡通常不支持真 RFMON（详见 README「macOS 监听模式限制」），因此抓包环节在 Linux 完成。
+> macOS 内置网卡的监听模式不稳定（在这台 Apple Silicon Mac 上实测 0 个帧，详见 README「macOS 监听模式限制」），因此抓包环节按 Linux 机器计划。
 
 ## 1. 目标
 
